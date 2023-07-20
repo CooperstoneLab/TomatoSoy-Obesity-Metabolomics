@@ -3,12 +3,7 @@ title: "Metabolomics Data analysis"
 subtitle: "Urine, C18 (-) LCMS"
 author: "Maria Sholola"
 date: '2023-06-05'
-output:  
-  html_document:
-    toc: true
-    toc_float: true
-    theme: flatly
-    code_download: true
+output: github_document
 ---
 
 ```{r setup, include=FALSE} 
