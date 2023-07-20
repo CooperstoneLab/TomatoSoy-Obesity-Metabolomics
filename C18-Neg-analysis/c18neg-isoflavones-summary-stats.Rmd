@@ -5,6 +5,11 @@ date: "2023-06-28 and so on"
 output: github_document
 ---
 
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo=TRUE) 
+```
+
+
 # Load libraries
 
 ```{r}

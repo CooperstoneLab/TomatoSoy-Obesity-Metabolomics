@@ -7,48 +7,10 @@ Maria Sholola
 
 ``` r
 library(tidyverse) # data wrangling
-```
-
-    ## ── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
-    ## ✔ dplyr     1.1.2     ✔ readr     2.1.4
-    ## ✔ forcats   1.0.0     ✔ stringr   1.5.0
-    ## ✔ ggplot2   3.4.2     ✔ tibble    3.2.1
-    ## ✔ lubridate 1.9.2     ✔ tidyr     1.3.0
-    ## ✔ purrr     1.0.1     
-    ## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
-    ## ✖ dplyr::filter() masks stats::filter()
-    ## ✖ dplyr::lag()    masks stats::lag()
-    ## ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
-
-``` r
 library(readxl) # read in excel files
 library(janitor) # clean up names in dataset
-```
-
-    ## 
-    ## Attaching package: 'janitor'
-    ## 
-    ## The following objects are masked from 'package:stats':
-    ## 
-    ##     chisq.test, fisher.test
-
-``` r
 library(corrr) # finding correlations
 library(rstatix) # stats
-```
-
-    ## 
-    ## Attaching package: 'rstatix'
-    ## 
-    ## The following object is masked from 'package:janitor':
-    ## 
-    ##     make_clean_names
-    ## 
-    ## The following object is masked from 'package:stats':
-    ## 
-    ##     filter
-
-``` r
 library(ggthemes)
 library(ggtext)
 library(ggpubr) # for adding pvals etc to plots
@@ -61,15 +23,6 @@ Using df’s from data analysis rmd
 ``` r
 imp_metabind_clust_log2_noQCs <- read_csv("meta_omics_noQCs.csv")
 ```
-
-    ## Rows: 48 Columns: 934
-    ## ── Column specification ────────────────────────────────────────────────────────
-    ## Delimiter: ","
-    ## chr   (7): sample_ID, Period, pre_post_intervention, Intervention, pre_post,...
-    ## dbl (927): Subject, Intervention_week, Age, BMI, 168.0777_0.606, 154.0621_0....
-    ## 
-    ## ℹ Use `spec()` to retrieve the full column specification for this data.
-    ## ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
 
 Significant = p \< 0.05, foldchange \> 2
 
@@ -211,22 +164,11 @@ compare_means(rel_abund_log2 ~ pre_post,
        subtitle = "Negative ionization mode"))
 ```
 
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
-
 ![](c18neg-isoflavones-summary-stats_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
 
 ``` r
 ggsave("figures/total_isoflavones.svg", total_isoflavones_boxplots, width = 10)
 ```
-
-    ## Saving 10 x 5 in image
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
 
 # Putative isoflavones
 
@@ -313,17 +255,6 @@ EPS1_tidy$pre_post <- factor(EPS1_tidy$pre_post, levels = c("pre", "post"))
        subtitle = "Negative ionization mode, m/z = 201.0227, retention time = 4.08"))
 ```
 
-    ## Warning: Using `size` aesthetic for lines was deprecated in ggplot2 3.4.0.
-    ## ℹ Please use `linewidth` instead.
-    ## This warning is displayed once every 8 hours.
-    ## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was
-    ## generated.
-
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
-
 ![](c18neg-isoflavones-summary-stats_files/figure-gfm/unnamed-chunk-14-1.png)<!-- -->
 
 confirmed with authentic standard
@@ -331,12 +262,6 @@ confirmed with authentic standard
 ``` r
 ggsave(filename = "figures/4-EPS.svg", plot = EPS1_bps, width = 12)
 ```
-
-    ## Saving 12 x 5 in image
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
-    ## `geom_line()`: Each group consists of only one observation.
-    ## ℹ Do you need to adjust the group aesthetic?
 
 ``` r
 isoflavones_tidy %>% 
