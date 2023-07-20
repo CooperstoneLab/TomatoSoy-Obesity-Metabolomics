@@ -1,0 +1,1233 @@
+---
+author: "Maria Sholola"
+title: "USDA inflammation - summary stats for carotenoids, cytokines, and immune cells"
+date: 'March 2022 and so on'
+output: 
+  github_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+    anchor_sections: true
+    code_download: true
+    code_folding: show
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+```
+
+# Introduction
+
+Statistical analysis of plasma carotenoids, plasma cytokines and immune cells from randomized cross-over USDA inflammation clinical trial. Subjects consumed both low lycopene tomato (yellow) and high lycopene tomato-soy juices (red) for 4 weeks each.
+
+```{r echo=FALSE, out.width = "80%", fig.align = "center", out.height= "10%"}
+knitr::include_graphics("/Users/mariasholola/Documents/GitHub/USDA-Inflammation-Metabolomics/tomato-soy-clinical-schematic.png")
+```
+
+
+# Load libraries
+```{r, message=FALSE}
+library(tidyverse) # data wrangling
+library(readxl) # read in excel files
+library(janitor) # clean up names in dataset
+library(corrr) # finding correlations
+library(rstatix) # stats
+library(lme4) # mixed linear modeling
+library(knitr) # aesthetic table viewing
+library(lmerTest) # add pvalue column to lmer models
+library(purrr) # create functions
+library(broom.mixed) # generate tidy data frames for lmer results
+library(MuMIn) # lmer model testing using AICc
+library(kableExtra)
+library(ggthemes)
+library(ggtext)
+```
+
+# Read in data
+
+```{r}
+# load data
+meta_table <- read_excel("CompiledData_Results_Meta.xlsx",
+                         sheet = "metadata_corrected_withsequence")
+
+# clean up variable names 
+meta_table <- clean_names(meta_table)
+
+```
+
+
+## Wrangle
+
+```{r}
+# convert variables that should be factors to factors
+meta_table <- meta_table %>%
+  mutate(across(.cols = c("patient_id", "period", 
+                          "intervention", "intervention_week", 
+                          "pre_post", "sex", "sequence"),
+                .fns = as.factor))
+
+
+# some stuff came in as characters but should be numeric
+meta_table <- meta_table %>%
+  mutate(across(.cols = c("il_2", "il_10", "il_13", "il_4"),
+                .fns = as.numeric))
+
+
+
+# changing factor levels for pre_post
+meta_table$pre_post <- factor(meta_table$pre_post,
+                              levels = c("pre", "post"))
+
+levels(meta_table$pre_post)        
+
+# Calculate total_cis_lyc, total_lyc, and total_carotenoids
+meta_table <- meta_table %>%
+  rename(n5_cis_lyc = x5_cis_lyc) %>%
+  mutate(total_cis_lyc = other_cis_lyc + n5_cis_lyc,
+         total_lyc = all_trans_lyc + total_cis_lyc,
+         total_carotenoids = lutein + zeaxanthin + b_cryptoxanthin + 
+                             a_carotene + b_carotene + total_lyc) 
+
+
+```
+
+# Carotenoids
+
+## All-trans-lyc levels
+
+```{r}
+# line plots for each subject at each timepoint
+meta_table %>% 
+  ggplot(aes(x = intervention_week, y = all_trans_lyc, color = intervention)) +
+  geom_point() + 
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Baseline" = "gray", 
+                                           "Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id), scales = "free_y") + 
+  theme_bw() +
+  labs(x = "Intervention Week",
+       y = "All-trans-lycopene levels (nmol/L)",
+       title = "All-trans-lycopene levels in each patient before/after each intervention")
+```
+
+## Total cis-lyc levels
+```{r}
+# line plots for each subject at each timepoint
+meta_table %>% 
+  ggplot(aes(x = intervention_week, y = total_cis_lyc, color = intervention)) +
+  geom_point() + 
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Baseline" = "gray", 
+                                           "Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id)) +
+  theme_bw() +
+  labs(x = "Intervention Week",
+       y = "Total cis-lycopene levels (nmol/L)",
+       title = "Total cis-lycopene levels in each patient before/after each intervention")
+```
+
+## Total lyc levels
+
+```{r}
+# line plots for each subject at each timepoint
+meta_table %>% 
+  ggplot(aes(x = intervention_week, y = total_lyc, color = intervention)) +
+  geom_point() + 
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Baseline" = "gray", 
+                                           "Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id), scales = "free_y") +
+  theme_bw() +
+  labs(x = "Intervention Week",
+       y = "Total lycopene levels (nmol/L)",
+       title = "Total lycopene levels in each patient before/after each intervention")
+```
+
+### Aggregate data 
+
+Data wrangling
+
+```{r}
+# create a more specific pre_post_intervention column
+meta_table_edited <- meta_table %>%
+  unite(col = "pre_post_intervention",
+        c("pre_post","intervention"),
+        sep = "_",
+        remove = FALSE)
+
+# make legend title
+legendtitle_ppintervention <- "Timepoint"
+
+# make pre_post_intervention column factors
+meta_table_edited$pre_post_intervention <- as.factor(meta_table_edited$pre_post_intervention)
+
+# relevel factor columns
+meta_table_edited$pre_post_intervention <- factor(meta_table_edited$pre_post_intervention, levels = c("pre_Yellow", "post_Yellow", "pre_Red", "post_Red"))
+
+meta_table_edited$intervention <- factor(meta_table_edited$intervention,
+                                         levels = c("Yellow", "Red"))
+
+labs_ppintervention <- c("before\ncontrol",
+                         "after\ncontrol",
+                         "before\nTomato-Soy",
+                         "after\nTomato-Soy")
+
+```
+
+#### boxplots
+```{r}
+meta_table_edited %>% 
+  filter(intervention != "Baseline") %>%
+  ggplot(aes(x = intervention, y = total_lyc, fill = pre_post_intervention)) +
+  geom_boxplot(outlier.shape = NA) + 
+  scale_fill_manual(legendtitle_ppintervention,
+                    values = c("pre_Red" = "#FF9966",
+                               "post_Red" = "#FF3300",
+                               "pre_Yellow" = "#FFFF99",
+                               "post_Yellow" = "yellow"),
+                    labels = labs_ppintervention) +
+  theme_clean() +
+  labs(x = "",
+       y = "Total lycopene levels (nmol/L)",
+       title = "Total lycopene levels before/after juice interventions")
+```
+
+
+```{r, fig.width=12}
+meta_table_edited %>% 
+  filter(intervention != "Baseline") %>%
+  ggplot(aes(x = pre_post_intervention, y = total_lyc, fill = intervention)) +
+  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1")) +
+  scale_x_discrete(labels = labs_ppintervention) +
+  theme_clean(base_size = 22, base_family = "sans") +
+  labs(x = "",
+       y = "Overall plasma lycopene conc. (nmol/L)",
+       title = "Total plasma lycopene levels",
+       subtitle = "Before and after juice interventions")
+```
+
+
+
+```{r, fig.width=12}
+library(ggpubr)
+
+(total_lyc_levels <- meta_table_edited %>% 
+    filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "total_lyc", fill = "intervention", line.color = "gray", line.size = 1, facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "nmol/L plasma",
+       title = "Concentration of Lycopene",
+       subtitle = ""))
+```
+#### export
+```{r}
+ggsave(filename = "/Users/mariasholola/Documents/GitHub/USDA-Inflammation-Metabolomics/Plots/total-lyc-red-and-yellow-boxplots.svg", plot = total_lyc_levels, width = 12)
+```
+
+
+### Descriptive stats
+
+Convert df to tidy for lycopene
+```{r}
+# convert meta_table_edited to long format for lycopene
+meta_table_lyc_long <- meta_table_edited %>%
+  pivot_longer(cols = total_lyc,
+               names_to = "total_lycopene",
+               values_to = "nmol_per_L")
+```
+
+
+Tomato soy average and stdev
+```{r}
+meta_table_lyc_long %>%
+  filter(intervention == "Red") %>%
+  group_by(pre_post) %>%
+  summarize(mean = mean(nmol_per_L),
+            stdev = sd(nmol_per_L))
+```
+
+Low carotenoid average and stdev
+```{r}
+meta_table_lyc_long %>%
+  filter(intervention == "Yellow") %>%
+  group_by(pre_post) %>%
+  summarize(mean = mean(nmol_per_L),
+            stdev = sd(nmol_per_L))
+```
+
+Fold increase subject-wise on each intervention
+```{r}
+lyc_long_subset <- meta_table_lyc_long %>%
+  select(patient_id, intervention, pre_post, nmol_per_L) %>%
+  unite("intervention_pre_post", intervention:pre_post) %>%
+  pivot_wider(names_from = intervention_pre_post,
+              values_from = nmol_per_L) %>%
+  mutate(red_FC = Red_post/Red_pre,
+         yellow_FC = Yellow_post/Yellow_pre)
+
+lyc_long_subset %>%
+  summarize(mean_red_FC = mean(red_FC),
+            mean_yellow_FC = mean(yellow_FC))
+```
+
+
+#### Normality checks
+
+Plot histogram
+```{r}
+gghistogram(meta_table_lyc_long$nmol_per_L, bins = 40)
+```
+
+Shapiro's normality test
+```{r}
+# shapiro normality test for total lycopene 
+meta_table_lyc_long %>%
+  group_by(total_lycopene) %>%
+  shapiro_test(vars = "nmol_per_L")
+```
+P val for shapiro test turned out to < 0.05, meaning data here is not normal. I will run the non-parametric alternative to paired t-tests, Wilcoxon's test. 
+
+#### Compare means
+```{r}
+# wilcoxon's rank-sum test
+compare_means(nmol_per_L ~ pre_post, meta_table_lyc_long, method = "wilcox.test", paired = TRUE, group.by = "intervention")
+```
+
+
+
+## Total carotenoid levels
+
+```{r}
+meta_table_edited %>% 
+  ggplot(aes(x = intervention_week, y = total_carotenoids, color = intervention)) +
+  geom_point() + 
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Baseline" = "gray", 
+                                           "Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id)) +
+  theme_bw() +
+  labs(x = "Intervention Week",
+       y = "Total carotenoid levels (nmol/L)",
+       title = "Total carotenoid levels in each patient before/after each intervention")
+```
+
+**Patient 6112 carotenoid levels go up after control intervention.**
+
+# Cytokines
+
+Wrangle
+```{r}
+# convert cytokines from wide to long
+meta_cytokines_long <- meta_table_edited %>%
+  pivot_longer(cols = if_ng:il_4,
+               names_to = "cytokines",
+               values_to = "cyto_conc_pg_ml")
+```
+
+## Carryover effects?
+
+First, let's test for sequence effects. We hope to not have this problem since we feel that the washout period of 4 weeks was sufficient enough for the intervention to not have lingering effects on cytokine levels.
+
+### Normality check
+```{r}
+meta_cytokines_long %>%
+  group_by(sequence) %>%
+  shapiro_test(cyto_conc_pg_ml)
+```
+
+Data is not normally distributed, so will use nonparametric paired tests for this test.
+
+### Wilcoxon rank-sum
+
+```{r}
+(wilcox_cyto_seqeffects <- meta_cytokines_long %>%
+   filter(intervention != "Baseline") %>%
+   group_by(period) %>%
+   wilcox_test(cyto_conc_pg_ml ~ sequence, paired = TRUE, p.adjust.method = "BH"))
+```
+
+Within each period, sequence does not significantly effect the outcome. Therefore we can continue to assume there are no sequence effects.
+
+## Intervention effects
+Here, we look at significant differences between post-tomatosoy and post-yellow.
+
+### Normality check
+```{r}
+meta_cytokines_long %>%
+  filter(pre_post == "post") %>%
+  group_by(cytokines) %>%
+  shapiro_test(cyto_conc_pg_ml)
+```
+
+In this case, many cytokines are not normally distributed. So I'll go forward with non-parametric paired tests.
+
+### Wilxocon rank-sum
+```{r}
+(wilcox_cyto_intervention <- meta_cytokines_long %>%
+  filter(pre_post == "post") %>%
+  group_by(cytokines) %>%
+  wilcox_test(cyto_conc_pg_ml ~ intervention, paired = TRUE, p.adjust.method = "BH"))
+```
+
+
+```{r}
+# extract statistically significant cytokines 
+wilcox_cyto_intervention %>%
+  filter(wilcox_cyto_intervention$p < 0.05)
+
+```
+
+
+* There are no cytokines with significantly different levels when comparing post-red vs. post-yellow treatment
+
+* Moving forward, I will use wilcoxon rank sum tests for the rest of the tests under the assumption that all of the variables are not normally distributed. 
+
+## Yellow treatment effects
+
+### Normality check
+```{r}
+meta_cytokines_long %>%
+  filter(intervention == "Yellow") %>%
+  group_by(cytokines) %>%
+  shapiro_test(cyto_conc_pg_ml)
+```
+
+### Wilcoxon rank-sum
+```{r}
+(wilcox_cyto_yellow <- meta_cytokines_long %>%
+  filter(intervention == "Yellow") %>%
+  group_by(cytokines) %>%
+  wilcox_test(cyto_conc_pg_ml ~ pre_post, paired = TRUE, p.adjust.method = "BH"))
+```
+
+
+```{r}
+# extract statistically significant cytokines 
+wilcox_cyto_yellow %>%
+  filter(wilcox_cyto_yellow$p < 0.05)
+
+```
+
+* No significant cytokines within yellow treatment
+
+
+## Red treatment effects
+
+### Normality check
+```{r}
+meta_cytokines_long %>%
+  filter(intervention == "Red") %>%
+  group_by(cytokines) %>%
+  shapiro_test(cyto_conc_pg_ml)
+```
+
+```{r}
+(wilcox_cyto_red <-  meta_cytokines_long %>%
+  filter(intervention == "Red") %>%
+  group_by(cytokines) %>%
+  wilcox_test(cyto_conc_pg_ml ~ pre_post, paired = TRUE, p.adjust.method = "BH"))
+```
+
+```{r}
+# extract statistically significant cytokines 
+wilcox_cyto_red %>%
+  filter(wilcox_cyto_red$p < 0.05)
+```
+
+* There are 3 cytokines (GM-CSF, IL-12p70, and IL-5) significantly different between pre and post-Red interventions only. Lets investigate. 
+
+
+#### GM-CSF
+
+##### boxplots
+```{r}
+meta_cytokines_long %>% 
+   filter(cytokines == "gm_csf") %>%
+  filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "cyto_conc_pg_ml", fill = "intervention", facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "pg/mL plasma",
+       title = "Concentration of GM-CSF",
+       subtitle = "")
+
+```
+
+One subject has much higher levels than others. Let's run a log2 transformation to get a better visual idea of what is happening with the rest.
+
+```{r}
+meta_logcytokines_long <- meta_cytokines_long %>%
+  mutate(log2_cyto_conc_pg_ml = log2(cyto_conc_pg_ml))
+```
+
+
+```{r}
+meta_logcytokines_long %>% 
+   filter(cytokines == "gm_csf") %>%
+  filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "log2_cyto_conc_pg_ml", fill = "intervention", facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 transformed levels in plasma (pg/mL)",
+       title = "Concentration of GM-CSF",
+       subtitle = "")
+
+```
+
+What do GM-CSF levels look like between interventions? 
+
+```{r, fig.width=10}
+(total_GM_CSF_levels_postred_v_postyellow <- meta_cytokines_long %>% 
+   filter(cytokines == "gm_csf") %>%
+   filter(pre_post == "post") %>%
+  ggpaired(x = "pre_post_intervention", y = "cyto_conc_pg_ml", fill = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "pg/mL plasma",
+       title = "Concentration of GM-CSF",
+       subtitle = ""))
+
+```
+
+##### fold change
+
+What is the avg fold change in the red intervention? 
+
+```{r}
+red_gmcsf_cyto_subset <- meta_cytokines_long %>%
+  filter(intervention == "Red") %>%
+  filter(cytokines == "gm_csf") %>%
+  drop_na() %>%
+  select(patient_id, intervention, pre_post_intervention, cyto_conc_pg_ml) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(red_FC = post_Red/pre_Red)
+
+red_gmcsf_cyto_subset %>%
+  summarize(mean_red_FC = mean(red_FC))
+
+```
+
+What about within the yellow?
+```{r}
+yellow_gmcsf_cyto_subset <- meta_cytokines_long %>%
+  filter(intervention == "Yellow") %>%
+  filter(cytokines == "gm_csf") %>%
+  select(patient_id, intervention, pre_post_intervention, cyto_conc_pg_ml) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(yellow_FC = post_Yellow/pre_Yellow)
+
+yellow_gmcsf_cyto_subset %>%
+  summarize(mean_yellow_FC = mean(yellow_FC))
+```
+
+
+
+#### IL-12p70
+
+##### boxplots
+
+```{r}
+meta_cytokines_long %>% 
+   filter(cytokines == "il_12p70") %>%
+  filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "cyto_conc_pg_ml", fill = "intervention", facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "pg/mL plasma",
+       title = "Concentration of IL-12p70",
+       subtitle = "")
+
+```
+
+Again, one subj is extremely high. So we will log2 transform for visualization purposes.
+
+```{r}
+meta_logcytokines_long %>% 
+   filter(cytokines == "il_12p70") %>%
+  filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "log2_cyto_conc_pg_ml", fill = "intervention", facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 transformed levels in plasma (pg/mL)",
+       title = "Concentration of IL-12p70",
+       subtitle = "")
+```
+
+What do IL-12p70 levels look like between interventions?
+
+```{r, fig.width=10}
+(total_IL12p70_levels_postred_v_postyellow <- meta_cytokines_long %>% 
+   filter(cytokines == "il_12p70") %>%
+   filter(pre_post == "post") %>%
+  ggpaired(x = "pre_post_intervention", y = "cyto_conc_pg_ml", fill = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "pg/mL plasma",
+       title = "Concentration of IL-12p70",
+       subtitle = ""))
+
+```
+
+##### fold change
+
+What is the avg fold change in the red intervention? 
+
+```{r}
+red_il_12p70_cyto_subset <- meta_cytokines_long %>%
+  filter(intervention == "Red") %>%
+  filter(cytokines == "il_12p70") %>%
+  drop_na() %>%
+  select(patient_id, intervention, pre_post_intervention, cyto_conc_pg_ml) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(red_FC = post_Red/pre_Red)
+
+red_il_12p70_cyto_subset %>%
+  summarize(mean_red_FC = mean(red_FC))
+
+```
+
+What about within the yellow?
+```{r}
+yellow_il_12p70_cyto_subset <- meta_cytokines_long %>%
+  filter(intervention == "Yellow") %>%
+  filter(cytokines == "il_12p70") %>%
+  select(patient_id, intervention, pre_post_intervention, cyto_conc_pg_ml) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(yellow_FC = post_Yellow/pre_Yellow)
+
+yellow_il_12p70_cyto_subset %>%
+  summarize(mean_yellow_FC = mean(yellow_FC))
+```
+
+
+
+#### IL-5
+
+##### boxplots 
+
+```{r}
+(total_IL5_levels <- meta_cytokines_long %>% 
+   filter(cytokines == "il_5") %>%
+  filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "cyto_conc_pg_ml", fill = "intervention", facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 transformed levels in plasma (pg/mL)",
+       title = "Concentration of IL-5",
+       subtitle = ""))
+```
+
+```{r}
+ggsave(filename = "/Users/mariasholola/Documents/GitHub/USDA-Inflammation-Metabolomics/Plots/total-IL5-levels-red-yellow.svg", plot = total_IL5_levels, width = 10)
+```
+
+```{r}
+meta_logcytokines_long %>% 
+   filter(cytokines == "il_5") %>%
+  filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "log2_cyto_conc_pg_ml", fill = "intervention", facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "pg/mL plasma",
+       title = "Concentration of IL-5",
+       subtitle = "")
+```
+
+What do IL-5 levels look like between interventions?
+
+```{r, fig.width=10}
+(total_IL5_levels_postred_v_postyellow <- meta_cytokines_long %>% 
+   filter(cytokines == "il_5") %>%
+   filter(pre_post == "post") %>%
+  ggpaired(x = "pre_post_intervention", y = "cyto_conc_pg_ml", fill = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "pg/mL plasma",
+       title = "Concentration of IL-5",
+       subtitle = ""))
+
+```
+
+##### fold change
+What is the avg fold change in the red intervention? 
+
+```{r}
+red_il_5_cyto_subset <- meta_cytokines_long %>%
+  filter(intervention == "Red") %>%
+  filter(cytokines == "il_5") %>%
+  drop_na() %>%
+  select(patient_id, intervention, pre_post_intervention, cyto_conc_pg_ml) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(red_FC = post_Red/pre_Red)
+
+red_il_5_cyto_subset %>%
+  summarize(mean_red_FC = mean(red_FC))
+
+```
+
+What about within the yellow?
+```{r}
+yellow_il_5_cyto_subset <- meta_cytokines_long %>%
+  filter(intervention == "Yellow") %>%
+  filter(cytokines == "il_5") %>%
+  select(patient_id, intervention, pre_post_intervention, cyto_conc_pg_ml) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(yellow_FC = post_Yellow/pre_Yellow)
+
+yellow_il_5_cyto_subset %>%
+  summarize(mean_yellow_FC = mean(yellow_FC))
+```
+
+
+
+### Correlation w/ carotenoids
+
+```{r}
+correlation_cyto_red <- meta_table %>%
+  filter(intervention == "Red") %>%
+  select(total_lyc, total_carotenoids, b_carotene, total_cis_lyc, a_carotene, lutein, zeaxanthin, b_cryptoxanthin, il_5, il_12p70, gm_csf) %>%
+  correlate()
+
+kable(correlation_cyto_red, format = "markdown", digits = 3)
+```
+
+No strong correlation between the significant cytokines and carotenoids. Let's still visualize what the trends look like in both interventions.
+
+```{r, fig.width=9, fig.asp=0.5}
+sig_cytokines_red <- meta_cytokines_long %>%
+  filter(cytokines %in% c("il_5", "gm_csf", "il_12p70"))
+
+sig_cytokines_red %>%
+  ggplot(aes(x = total_lyc, y = cyto_conc_pg_ml, color = intervention)) +
+  geom_point() +
+  scale_color_manual(values = c("Yellow" = "yellow3",
+                                "Red" = "red")) +
+  theme_bw() +
+  facet_wrap(vars(cytokines), scales = "free")
+```
+
+No differences between the trends. 
+
+# Immune Cells
+
+```{r}
+# convert immune cell data from wide to long
+meta_cells_long <- meta_table_edited %>%
+  pivot_longer(cols = starts_with("x"),
+               names_to = "cell_type",
+               values_to = "cell_value")
+```
+
+
+## Carryover effects?
+
+### Normality check
+```{r}
+meta_cells_long %>%
+  group_by(sequence) %>%
+  shapiro_test(cell_value)
+```
+
+Data is not normally distributed, so will use nonparametric paired tests for this test.
+
+### Wilcoxon rank-sum
+
+```{r}
+(wilcox_cells_seqeffects <- meta_cells_long %>%
+   filter(intervention != "Baseline") %>%
+   group_by(period) %>%
+   wilcox_test(cell_value ~ sequence, paired = TRUE, p.adjust.method = "BH"))
+```
+
+## Intervention effects
+
+### Normality check
+```{r}
+shap_cells_intervention <- meta_cells_long %>%
+  filter(pre_post == "post") %>%
+  group_by(cell_type) %>%
+  shapiro_test(cell_value)
+
+kable(shap_cells_intervention, format = "markdown", digits = 3)
+```
+
+In this case, many cells are not normally distributed. So I'll go forward with non-parametric paired tests.
+
+### Wilxocon rank-sum
+```{r}
+(contains_NAs <- meta_cells_long %>%
+  filter(intervention != "Baseline") %>%
+  group_by(cell_type) %>%
+  count(is.na(cell_value)) %>%
+  filter(`is.na(cell_value)` == TRUE))
+
+# CD66+CD11+ MDSC granulocytes have a lot of missing values - we will take this out moving forward.
+
+wilcox_cells_intervention <- meta_cells_long %>%
+  filter(cell_type != "x41_cd66b_mdsc_grans") %>%
+  filter(pre_post == "post") %>%
+  group_by(cell_type) %>%
+  wilcox_test(cell_value ~ intervention, paired = TRUE, p.adjust.method = "BH") %>%
+  add_significance("p")
+
+kable(wilcox_cells_intervention, format = "markdown", digits = 5)
+```
+
+
+
+```{r}
+# extract statistically significant cytokines 
+(sig_cells_intervention <- wilcox_cells_intervention %>%
+  filter(wilcox_cells_intervention$p < 0.05))
+
+```
+
+
+* 3 cell types are significantly different between interventions! Let's see how they are different by visualizations/summaries.
+
+### Sig cells
+
+#### boxplots
+
+```{r, fig.width= 12}
+meta_cells_long %>% 
+  filter(cell_type %in% sig_cells_intervention$cell_type) %>%
+  filter(intervention != "Baseline") %>%
+  filter(pre_post == "post") %>%
+  ggpaired(x = "intervention", y = "cell_value", fill = "intervention", facet.by = "cell_type", short.panel.labs = FALSE, panel.labs = list(cell_type = c("CD56+CD161+CD123- (NK cells)", "CD16- NK cells", "CD14+ MDSC (Mono)"))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Cell value",
+       title = "Cell populations significantly different between interventions",
+       subtitle = "")
+
+```
+
+ Let's run a log2 transformation to get a better visual for CD14+ monocytes
+
+```{r}
+meta_log_cells_long <- meta_cells_long %>%
+  mutate(log2_cell_value = log2(cell_value))
+```
+
+
+```{r, fig.width= 12}
+meta_log_cells_long %>% 
+  filter(cell_type %in% sig_cells_intervention$cell_type) %>%
+  filter(intervention != "Baseline") %>%
+  filter(pre_post == "post") %>%
+  ggpaired(x = "intervention", y = "log2_cell_value", fill = "intervention", facet.by = "cell_type", short.panel.labs = FALSE, panel.labs = list(cell_type = c("CD56+CD161+CD123- (NK cells)", "CD16- NK cells", "CD14+ MDSC (Mono)"))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 cell values",
+       title = "Cell populations significantly different between interventions",
+       subtitle = "")
+
+```
+
+* Seems like the trend is CD56+CD161+ NK cells and CD14+ MDSCs are greater post-tomato soy compared to yellow interventions but the opposite for CD16- NK cells. 
+
+#### fold change
+
+What is the avg fold change in the red intervention? 
+
+```{r}
+
+intervention_cells_subset <- meta_cells_long %>%
+  filter(intervention != "Baseline") %>%
+  filter(cell_type %in% sig_cells_intervention$cell_type)%>%
+  select(patient_id, pre_post_intervention, cell_type, cell_value) %>%
+  group_by(cell_type) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cell_value) %>%
+  mutate(post_intervention_FC = post_Red/post_Yellow)
+
+intervention_cells_subset %>%
+  summarize(mean_intervention_FC = mean(post_intervention_FC))
+
+```
+
+
+* CD14+ MDSC monocytes shows a huge mean fold change between interventions!
+
+## Yellow treatment effects
+
+### Normality check
+
+```{r}
+shap_cells_yellow <- meta_cells_long %>%
+  filter(cell_type != "x41_cd66b_mdsc_grans") %>%
+  filter(intervention == "Yellow") %>%
+  group_by(cell_type) %>%
+  shapiro_test(cell_value)
+
+kable(shap_cells_yellow, format = "markdown", digits = 3)
+```
+
+
+
+### Wilcoxon rank-sum
+```{r}
+wilcox_cells_yellow <- meta_cells_long %>%
+   filter(intervention == "Yellow") %>%
+   filter(cell_type != "x41_cd66b_mdsc_grans") %>%
+   group_by(cell_type) %>%
+   wilcox_test(cell_value ~ pre_post, paired = TRUE, p.adjust.method = "BH")
+
+kable(wilcox_cells_yellow, format = "markdown", digits = 3)
+```
+
+
+```{r}
+# extract statistically significant cytokines 
+(sig_cells_yellow <- wilcox_cells_yellow %>%
+  filter(wilcox_cells_yellow$p < 0.05))
+
+```
+
+### Sig cells
+
+#### boxplots
+```{r, fig.height = 12, fig.width= 12}
+meta_cells_long %>% 
+  filter(cell_type %in% sig_cells_yellow$cell_type) %>%
+  filter(intervention == "Yellow") %>%
+  ggpaired(x = "pre_post", y = "cell_value", fill = "intervention", facet.by = "cell_type", short.panel.labs = FALSE, panel.labs = list(cell_type = c("CD8 T-cells","CD46RO+ CD45RA- (EM CD8)", "CD45R0- CD45A+ (TE CD)", "CD45RO-CD45RA+ (TE CD4)", "CD27-IgD+ (Naive B cells)", "CD56+CD161+CD123- (NK cells)"))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Cell value",
+       title = "Cell populations significantly different between pre- and post-Yellow",
+       subtitle = "")
+
+```
+
+ Let's visualize boxplots with log2 transformed values
+
+
+```{r, fig.width= 12}
+meta_log_cells_long %>% 
+  filter(cell_type %in% sig_cells_yellow$cell_type) %>%
+  filter(intervention == "Yellow") %>%
+  ggpaired(x = "pre_post", y = "log2_cell_value", fill = "intervention", facet.by = "cell_type", short.panel.labs = FALSE, panel.labs = list(cell_type = c("CD8 T-cells","CD46RO+ CD45RA- (EM CD8)", "CD45R0- CD45A+ (TE CD)", "CD45RO-CD45RA+ (TE CD4)", "CD27-IgD+ (Naive B cells)", "CD56+CD161+CD123- (NK cells)"))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 transformed cell value",
+       title = "Cell populations significantly different between pre- and post-Yellow",
+       subtitle = "")
+``` 
+
+* All cells here are increasing, suggesting a significant increase
+
+#### fold change
+
+What is the avg fold change in the yellow intervention? 
+
+```{r}
+
+yellow_cells_subset <- meta_cells_long %>%
+  filter(intervention == "Yellow") %>%
+  filter(cell_type %in% sig_cells_yellow$cell_type)%>%
+  select(patient_id, pre_post_intervention, cell_type, cell_value) %>%
+  group_by(cell_type) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cell_value) %>%
+  mutate(yellow_FC = post_Yellow/pre_Yellow)
+
+yellow_cells_subset %>%
+  summarize(mean_yellow_FC = mean(yellow_FC))
+
+```
+
+
+#### Correlation w/ carotenoids
+
+```{r}
+correlation_cells_yellow <- meta_table_edited %>%  
+  filter(intervention == "Yellow") %>%
+  select(total_lyc, total_carotenoids, b_carotene, total_cis_lyc, a_carotene, lutein, zeaxanthin, b_cryptoxanthin, all_of(sig_cells_yellow$cell_type)) %>%
+  correlate(method = "pearson")
+
+kable(correlation_cells_yellow, format = "markdown", digits = 3)
+```
+
+## Red treatment effects
+
+### Normality check
+
+```{r}
+shap_cells_red <- meta_cells_long %>%
+  filter(cell_type != "x41_cd66b_mdsc_grans") %>%
+  filter(intervention == "Red") %>%
+  group_by(cell_type) %>%
+  shapiro_test(cell_value)
+
+kable(shap_cells_red, format = "markdown", digits = 3)
+```
+
+
+
+### Wilcoxon rank-sum
+```{r}
+wilcox_cells_red <- meta_cells_long %>%
+   filter(intervention == "Red") %>%
+   filter(cell_type != "x41_cd66b_mdsc_grans") %>%
+   group_by(cell_type) %>%
+   wilcox_test(cell_value ~ pre_post, paired = TRUE, p.adjust.method = "BH")
+
+kable(wilcox_cells_red, format = "markdown", digits = 3)
+```
+
+
+```{r}
+# extract statistically significant cytokines 
+(sig_cells_red <- wilcox_cells_red %>%
+  filter(wilcox_cells_red$p < 0.05))
+
+```
+
+
+### Sig cells
+
+#### boxplots
+```{r, fig.height = 12, fig.width= 12}
+meta_cells_long %>% 
+  filter(cell_type %in% sig_cells_red$cell_type) %>%
+  filter(intervention == "Red") %>%
+  ggpaired(x = "pre_post", y = "cell_value", fill = "intervention", facet.by = "cell_type", short.panel.labs = FALSE, panel.labs = list(cell_type = c("CD46RO+ CD45RA- (EM CD8)", "CD19+ CD3- B-cells", "CD27-IgD+ (Naive B cells)"))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Tomato-soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", size = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Cell value",
+       title = "Cell populations significantly different between pre- and post-Red",
+       subtitle = "")
+
+```
+
+ 
+* All cells here are increasing, suggesting a significant increase
+
+#### fold change
+
+What is the avg fold change in the yellow intervention? 
+
+```{r}
+red_cells_subset <- meta_cells_long %>%
+  filter(intervention == "Red") %>%
+  filter(cell_type %in% sig_cells_red$cell_type)%>%
+  select(patient_id, pre_post_intervention, cell_type, cell_value) %>%
+  group_by(cell_type) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cell_value) %>%
+  mutate(red_FC = post_Red/pre_Red)
+
+red_cells_subset %>%
+  summarize(mean_red_FC = mean(red_FC))
+
+```
+
+
+## Correlation w/ carotenoids
+
+```{r}
+correlation_cells_red <- meta_table_edited %>%
+  filter(intervention == "Red") %>%
+  select(total_lyc, total_cis_lyc, total_carotenoids, b_carotene, total_cis_lyc, a_carotene, lutein, zeaxanthin, b_cryptoxanthin, all_of(sig_cells_red$cell_type)) %>%
+  correlate(method = "pearson")
+
+kable(correlation_cells_red, format = "markdown", digits = 3)
+```
+
+* slightly negative correlation between two cell types and alpha-carotene. no strong correlations between cell types and lycopene. hmm.
+
+### Corr scatterplots
+
+Even though the correlations between lycopene levels and immune cell types are weak according to Pearson, I want to visualize trends in red and yellow interventions.
+
+```{r, fig.width=10, fig.asp=0.5}
+meta_cells_long %>%
+  filter(cell_type %in% sig_cells_red$cell_type) %>%
+  ggplot(aes(x = total_lyc, y = cell_value, color = intervention)) +
+  geom_point() +
+  scale_color_manual(values = c("Yellow" = "yellow3",
+                                "Red" = "red")) +
+  theme_bw() +
+  facet_wrap(vars(cell_type), scales = "free")
+```
+
+
+Since there are strong correlations between 2 of the immune cells (the b-cells) and alpha-carotene, let's see what those trends look like in both interventions. 
+
+```{r, fig.width=10, fig.asp=0.5}
+meta_cells_long %>%
+  filter(cell_type %in% sig_cells_red$cell_type) %>%
+  ggplot(aes(x = a_carotene, y = cell_value, color = intervention)) +
+  geom_point() +
+  scale_color_manual(values = c("Yellow" = "yellow3",
+                                "Red" = "red")) +
+  theme_bw() +
+  facet_wrap(vars(cell_type), scales = "free")
+```
+
+
+What about for total carotenoid levels?
+
+```{r, fig.width=10, fig.asp=0.5}
+meta_cells_long %>%
+  filter(cell_type %in% sig_cells_red$cell_type) %>%
+  ggplot(aes(x = total_carotenoids, y = cell_value, color = intervention)) +
+  geom_point() +
+  scale_color_manual(values = c("Yellow" = "yellow3",
+                                "Red" = "red")) +
+  theme_bw() +
+  facet_wrap(vars(cell_type), scales = "free")
+```
+
+# Overall correlations?
+
+Let's look at the correlation between the immune cells, cytokines, and carotenoids. We'll look at all of the significant outcomes in all comparisons (post-Red vs post-Yellow, pre vs post Red, pre vs post Yellow)
+
+## Intervention comparison
+
+```{r}
+correlation_overall_intervention <- meta_table_edited %>%
+  filter(pre_post == "post") %>%
+  select(total_lyc, total_cis_lyc, total_carotenoids, b_carotene, total_cis_lyc, a_carotene, lutein, zeaxanthin, b_cryptoxanthin, all_of(sig_cells_red$cell_type), all_of(sig_cells_intervention$cell_type), all_of(sig_cells_yellow$cell_type), all_of(sig_cytokines_red$cytokines)) %>%
+  correlate(method = "pearson")
+
+kable(correlation_overall_intervention, format = "markdown", digits = 3)
+```
+
+## Yellow
+
+```{r}
+correlation_overall_yellow <- meta_table_edited %>%
+  filter(intervention == "Yellow") %>%
+  select(total_lyc, total_cis_lyc, total_carotenoids, b_carotene, total_cis_lyc, a_carotene, lutein, zeaxanthin, b_cryptoxanthin, all_of(sig_cells_red$cell_type), all_of(sig_cells_intervention$cell_type), all_of(sig_cells_yellow$cell_type), all_of(sig_cytokines_red$cytokines)) %>%
+  correlate(method = "pearson")
+
+kable(correlation_overall_yellow, format = "markdown", digits = 3)
+```
+
+
+
+## Red
+
+```{r}
+correlation_overall_red <- meta_table_edited %>%
+  filter(intervention == "Red") %>%
+  select(total_lyc, total_cis_lyc, total_carotenoids, b_carotene, total_cis_lyc, a_carotene, lutein, zeaxanthin, b_cryptoxanthin, all_of(sig_cells_red$cell_type), all_of(sig_cells_intervention$cell_type), all_of(sig_cells_yellow$cell_type), all_of(sig_cytokines_red$cytokines)) %>%
+  correlate(method = "pearson")
+
+kable(correlation_overall_red, format = "markdown", digits = 3)
+```
+
+
+
+* IL-12p70 and GM-CSF have a strong correlation (0.933) to each other here.
+
+# Summary
+
+* There are no sequence effects for any of the outcomes 
+
+* Carotenoids
+  * Total lycopene levels increase significantly only after tomato-soy intervention.
+
+* Cytokines
+  * No effects of carotenoids on cytokine levels 
+    * Once isoflavones and other phytochemicals are quantified, they will be investigated and it will be interesting to test interactions between the phytochemicals in mixed models.
+  * IL-5, GM-CSF, and IL-12p70 has a significant reduction in levels only after red (tomato-soy) intervention
+  * There are no significantly different cytokines when comparing plasma levels after both interventions.
+
+* Immune cell types
+  * 2 NK cell types and MDSC monocytes significantly change (1 NK and MDSC sig increase while the other NK cell type sig decreases) when comparing post-Yellow intervention to post-Red. 
+  * Several immune cell types significantly increase after yellow intervention.
+  * EM CD8, and 2 B-cell types increase significantly after yellow intervention.
+  * Several cell types are significantly different. Investigation of these cell populations are ongoing
+
