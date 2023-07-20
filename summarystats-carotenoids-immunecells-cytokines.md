@@ -11,19 +11,7 @@ cells from randomized cross-over USDA inflammation clinical trial.
 Subjects consumed both low lycopene tomato (yellow) and high lycopene
 tomato-soy juices (red) for 4 weeks each.
 
-<div class="figure" style="text-align: center">
-
-<img src="tomatosoy-clinical-trial-whitebg.png" alt="Crossover clinical trial design supplementing individuals with obesity 360 mL of a low carotenoid tomato juice or a high lycopene tomato-soy juice daily. Daily serving of low carotenoid tomato juice consisted of ~1.5mg lycopene/day while high lycopene tomato-soy juice intervention consisted of 54 mg lycopene/day in addition to 210 mg total soy isoflavones/day." width="500px" />
-<p class="caption">
-Crossover clinical trial design supplementing individuals with obesity
-360 mL of a low carotenoid tomato juice or a high lycopene tomato-soy
-juice daily. Daily serving of low carotenoid tomato juice consisted of
-\~1.5mg lycopene/day while high lycopene tomato-soy juice intervention
-consisted of 54 mg lycopene/day in addition to 210 mg total soy
-isoflavones/day.
-</p>
-
-</div>
+<img src="tomato-soy-clinical-schematic.png" width="80%" height="10%" style="display: block; margin: auto;" />
 
 # Load libraries
 
