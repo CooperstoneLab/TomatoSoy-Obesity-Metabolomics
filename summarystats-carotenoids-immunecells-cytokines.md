@@ -1,6 +1,6 @@
 USDA inflammation - summary stats for carotenoids, cytokines, and immune
 cells
-
+================
 Maria Sholola
 March 2022 and so on
 
@@ -23,7 +23,7 @@ consisted of 54 mg lycopene/day in addition to 210 mg total soy
 isoflavones/day.
 </p>
 
-
+</div>
 
 # Load libraries
 
