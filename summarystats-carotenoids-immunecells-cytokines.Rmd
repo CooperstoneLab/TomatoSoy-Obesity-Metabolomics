@@ -2,14 +2,7 @@
 author: "Maria Sholola"
 title: "USDA inflammation - summary stats for carotenoids, cytokines, and immune cells"
 date: 'March 2022 and so on'
-output: 
-  github_document:
-    theme: yeti
-    toc: true
-    toc_float: true
-    anchor_sections: true
-    code_download: true
-    code_folding: show
+output: github_document
 
 ---
 
@@ -23,8 +16,8 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 
 Statistical analysis of plasma carotenoids, plasma cytokines and immune cells from randomized cross-over USDA inflammation clinical trial. Subjects consumed both low lycopene tomato (yellow) and high lycopene tomato-soy juices (red) for 4 weeks each.
 
-```{r echo=FALSE, out.width = "80%", fig.align = "center", out.height= "10%"}
-knitr::include_graphics("/Users/mariasholola/Documents/GitHub/USDA-Inflammation-Metabolomics/tomato-soy-clinical-schematic.png")
+```{r echo=FALSE, out.width="500px", fig.align='center', fig.cap="Crossover clinical trial design supplementing individuals with obesity 360 mL of a low carotenoid tomato juice or a high lycopene tomato-soy juice daily. Daily serving of low carotenoid tomato juice consisted of ~1.5mg lycopene/day while high lycopene tomato-soy juice intervention consisted of 54 mg lycopene/day in addition to 210 mg total soy isoflavones/day."}
+knitr::include_graphics("tomatosoy-clinical-trial-whitebg.png")
 ```
 
 
