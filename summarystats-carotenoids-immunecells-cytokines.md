@@ -11,7 +11,7 @@ cells from randomized cross-over USDA inflammation clinical trial.
 Subjects consumed both low lycopene tomato (yellow) and high lycopene
 tomato-soy juices (red) for 4 weeks each.
 
-<img src="tomato-soy-clinical-schematic.png" width="80%" height="10%" style="background-color:#ffff />
+<img src="tomato-soy-clinical-schematic.png" width="80%" height="10%" style="background-color:#ffff>
 
 # Load libraries
 
