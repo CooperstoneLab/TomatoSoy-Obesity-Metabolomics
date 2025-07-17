@@ -1,0 +1,363 @@
+---
+title: "isoflavones summary stats"
+author: "Maria Sholola"
+date: "2023-06-28 and so on"
+output: github_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo=TRUE) 
+```
+
+
+# Load libraries
+
+```{r}
+library(tidyverse) # data wrangling
+library(readxl) # read in excel files
+library(janitor) # clean up names in dataset
+library(corrr) # finding correlations
+library(rstatix) # stats
+library(ggthemes)
+library(ggtext)
+library(ggpubr) # for adding pvals etc to plots
+library(gridExtra)
+library(patchwork)
+```
+# Isoflavones df
+
+Using df's from data analysis rmd
+```{r}
+imp_metabind_clust_log2_noQCs <- read_csv("meta_omics_noQCs.csv")
+```
+
+# Grouped boxplots
+
+## Read in key 
+
+```{r}
+key <- read_xlsx("../annotated-features-table.xlsx",
+                 sheet = "Features") %>%
+  clean_names() %>%
+  filter(lc_mode_c18_hilic == "C18",
+         esi_mode == "-")
+```
+
+```{r}
+# use full tidy df
+tidy_omics <- imp_metabind_clust_log2_noQCs %>%
+  pivot_longer(cols = 12:ncol(.),
+               names_to = "mz_rt",
+               values_to = "rel_abund_log2")
+
+# relevel factor columns
+tidy_omics$pre_post_intervention <- factor(tidy_omics$pre_post_intervention, levels = c("pre_Yellow", "post_Yellow", "pre_Red", "post_Red"))
+
+tidy_omics$Intervention <- factor(tidy_omics$Intervention,
+                                         levels = c("Yellow", "Red"))
+
+# make clean label names
+labs_ppintervention <- c("pre\ncontrol",
+                         "post\ncontrol",
+                         "pre\nTomato-Soy",
+                         "post\nTomato-Soy")
+```
+
+## Daidzein metabs
+
+```{r}
+daidzein_metabs <- key %>%
+  filter(parent_compound == "Daidzein") %>%
+  inner_join(tidy_omics, by = "mz_rt")
+```
+
+### Boxplots
+
+#### for me
+```{r, fig.width=16, fig.height=12}
+daidzein_metabs %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_point() +
+  geom_line(aes(group = Subject, colour = as.factor(daidzein_metabs$Subject)), size = 0.2, show.legend = T) +
+  theme_classic(base_size = 18, base_family = "sans") +
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Daidzein metabolites (Level 2 id or higher)",
+       subtitle = "FDR adjusted p-values from paired T tests") +
+  facet_wrap( ~ id, scales = "free", ncol = 5, labeller = labeller(id = label_wrap_gen(12)))
+```
+
+#### cleaner
+```{r, fig.width=12, fig.height=24}
+my_comparisons <- list( c("pre_Yellow", "post_Yellow"), c("pre_Red", "post_Red"), c("post_Yellow", "post_Red") )
+
+(bps_daidzein_metabs <- daidzein_metabs %>% 
+  ggpaired(x = "pre_post_intervention", y = "rel_abund_log2", 
+           fill = "Intervention", line.color = "gray",
+           id = "Subject", line.size = 0.15) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1")) +
+  geom_point() +
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Daidzein metabolites") +
+  facet_wrap( ~ daidzein_metabs$id, ncol = 3, labeller = labeller(id = label_wrap_gen(21))) +
+  stat_compare_means(comparisons = my_comparisons, method = "t.test", paired = TRUE, p.adjust.method = "BH", label = "p.signif") +
+  theme_classic(base_size = 18, base_family = "sans") +
+  theme(axis.text.x = element_text(angle = 0)) +
+  rremove("legend"))
+```
+
+```{r}
+ggsave("daidzein_metabolites.svg",
+       width = 12, height = 20, scale = 1)
+```
+
+
+```{r, fig.height=8}
+daidzein_metabs %>% 
+  filter(id %in% c("daidzein glucuronide isomer 1", "daidzein glucuronide isomer 2", "daidzein glucuronide isomer 3")) %>%
+  ggpaired(x = "pre_post_intervention", y = "rel_abund_log2", 
+           fill = "Intervention", line.color = "gray",
+           id = "Subject", line.size = 0.15) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy")) +
+  geom_point() +
+  scale_x_discrete(labels = labs_ppintervention) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Daidzein glucuronide isomers detected in urine") +
+  facet_wrap( ~ daidzein_metabs$id, ncol = 3, labeller = labeller(id = label_wrap_gen(12))) +
+  stat_compare_means(comparisons = my_comparisons, method = "t.test", paired = TRUE, p.adjust.method = "BH", label = "p.signif") +
+  theme_classic(base_size = 14, base_family = "sans") +
+  theme(axis.text.x = element_text(angle = 45))
+```
+
+### line plots ODMA
+
+```{r, fig.width=12}
+daidzein_metabs %>% 
+  filter(id %in% c("O-DMA")) %>%
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, color = Intervention)) +
+  geom_point() + 
+  geom_line(aes(group = Intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "O-DMA: levels in each patient before/after each intervention")
+```
+
+```{r, fig.width=12}
+daidzein_metabs %>% 
+  filter(id %in% c("O-DMA glucuronide isomer 1")) %>%
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, color = Intervention)) +
+  geom_point() + 
+  geom_line(aes(group = Intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "O-DMA glcua 1: levels in each patient before/after each intervention")
+```
+
+
+```{r, fig.width=12}
+daidzein_metabs %>% 
+  filter(id %in% c("O-DMA glucuronide isomer 2")) %>%
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, color = Intervention)) +
+  geom_point() + 
+  geom_line(aes(group = Intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "O-DMA glcua 2: levels in each patient before/after each intervention")
+```
+
+## Genistein metabs
+
+
+```{r}
+genistein_metabs <- key %>%
+  filter(parent_compound == "Genistein") %>%
+  inner_join(tidy_omics, by = "mz_rt")
+```
+
+### Boxplots
+
+#### for me
+```{r, fig.width=12, fig.height=12}
+genistein_metabs %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_point() +
+  geom_line(aes(group = Subject, colour = as.factor(genistein_metabs$Subject)), size = 0.2, show.legend = T) +
+  theme_classic(base_size = 18, base_family = "sans") +
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Genistein metabolites (Level 2 id or higher)",
+       subtitle = "FDR adjusted p-values from paired T tests") +
+  facet_wrap( ~ id, scales = "free", ncol = 3, labeller = labeller(id = label_wrap_gen(12))) 
+```
+
+#### cleaner
+
+```{r, fig.width=8, fig.height=10}
+(bps_genistein_metabs <- genistein_metabs %>% 
+  ggpaired(x = "pre_post_intervention", y = "rel_abund_log2", 
+           fill = "Intervention", line.color = "gray",
+           id = "Subject", line.size = 0.15) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1")) +
+  geom_point() +
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Genistein metabolites") +
+  facet_wrap( ~ id, ncol = 4, labeller = labeller(id = label_wrap_gen(21))) +
+  stat_compare_means(comparisons = my_comparisons, method = "t.test", paired = TRUE, p.adjust.method = "BH", label = "p.signif") +
+  theme_classic(base_size = 18, base_family = "sans") +
+  theme(axis.text.x = element_text(angle = 0)) +
+  rremove("legend"))
+```
+
+
+```{r}
+ggsave("genistein_metabolites.svg",
+       width = 8, height = 20, scale = 1)
+```
+
+## Glycitein metabs
+
+
+```{r}
+glycitein_metabs <- key %>%
+  filter(parent_compound == "Glycitein") %>%
+  inner_join(tidy_omics, by = "mz_rt")
+```
+
+### Boxplots
+
+#### for me
+```{r, fig.width=12}
+glycitein_metabs %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_point() +
+  geom_line(aes(group = Subject, colour = as.factor(glycitein_metabs$Subject)), size = 0.2, show.legend = T) +
+  theme_classic(base_size = 18, base_family = "sans") +
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Glycitein metabolites (Level 2 id or higher)",
+       subtitle = "FDR adjusted p-values from paired T tests") +
+  facet_wrap( ~ id, scales = "free", ncol = 3, labeller = labeller(id = label_wrap_gen(12))) 
+```
+
+#### cleaner
+
+```{r, fig.height=5, fig.width=20}
+(bps_glycitein_metabs <- glycitein_metabs %>% 
+  ggpaired(x = "pre_post_intervention", y = "rel_abund_log2", 
+           fill = "Intervention", line.color = "gray",
+           id = "Subject", line.size = 0.15) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy")) +
+  geom_point() +
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Glycitein metabolites") +
+  facet_wrap( ~ id, ncol = 3, labeller = labeller(id = label_wrap_gen(21))) +
+  stat_compare_means(comparisons = my_comparisons, method = "t.test", paired = TRUE, p.adjust.method = "BH", label = "p.signif") +
+  theme_classic(base_size = 18, base_family = "sans") +
+  theme(axis.text.x = element_text(angle = 0)))
+```
+
+
+```{r}
+ggsave("glycitein_metabolites.svg",
+       width = 5, height = 20, scale = 1)
+```
+
+## Plot all together
+
+```{r, fig.height=25, fig.width=25}
+patchwork_design <- "AAABB
+                     AAABB
+                     AAABB 
+                     AAABB
+                     AAACC
+                     AAACC"
+
+bps_daidzein_metabs + bps_genistein_metabs + bps_glycitein_metabs +
+  plot_layout(design = patchwork_design, guides = "collect") +
+  plot_annotation(title = "Soy isoflavone (level 2 id or higher) levels grouped by parent compound",
+                  subtitle = "FDR adjusted p-values from paired T-tests",
+                  tag_levels = "A") 
+```
+
+```{r}
+ggsave("soyisoflavone_metabolites_boxplots.svg",
+       width = 25, height = 25, scale = 1)
+```
+
+
+# Microbial metabolite closeup
+
+
+```{r}
+all_daidzein_metabs <- key %>%
+  filter(parent_compound %in% c("Daidzein", "Daidzein/equol")) %>%
+  inner_join(tidy_omics, by = "mz_rt")
+```
+
+## Lineplots
+
+```{r, fig.width=12, fig.height=8}
+all_daidzein_metabs %>% 
+  filter(id %in% c("equol glucuronide", "O-DMA glucuronide isomer 2"),
+         Intervention == "Red") %>%
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, color = id)) +
+  geom_point() + 
+  geom_line(aes(group = id)) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Differences in microbial metabolism of daidzein for each subject",
+       caption = "Equol glucuronide: m/z 417.1192, RT 4.5 min. \nO-DMA glucuronide isomer 2: m/z 433.1136, RT 4.519 min.")
+```
+
+
+```{r, fig.width=12}
+ggsave("plots and figures/microbial-metab-linegraphs.svg",
+       width = 12, height = 8)
+```
+

@@ -1,0 +1,68 @@
+---
+title: "multilevel PCA"
+author: "Maria Sholola"
+date: "2023-06-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(mixOmics)
+```
+
+```{r}
+
+Data_forMPCA <- imp_metabind_clust_log2_noQCs %>%
+  mutate_at(c("Subject",
+              "Period",
+              "Intervention",
+              "pre_post",
+              "sequence",
+              "Intervention_week",
+              "Sex",
+              "Age",
+              "BMI",
+              "sample_ID",
+              "pre_post_intervention"),
+             as.factor)
+ 
+
+summary(as.factor(Data_forMPCA$Subject))
+
+mixOmicsPCA.result <- mixOmics::pca(Data_forMPCA[,-(c(1:11))],
+                            scale = FALSE,
+                            center = FALSE)
+
+plotIndiv(mixOmicsPCA.result, 
+          ind.names = Data_forMPCA$Subject, 
+          group = Data_forMPCA$pre_post_intervention, 
+          legend = TRUE, 
+          legend.title = "Treatment", 
+          title = 'Regular PCA, HILIC (-), Log2 transformed')
+
+
+
+multilevelPCA.result <- mixOmics::pca(Data_forMPCA[,-(c(1:11))], 
+                            multilevel = Data_forMPCA$Subject,
+                            scale = FALSE,
+                            center = FALSE)
+
+plotIndiv(multilevelPCA.result, 
+          ind.names = Data_forMPCA$Subject, 
+          group = Data_forMPCA$pre_post_intervention, 
+          legend = TRUE, 
+          legend.title = "Treatment", 
+          title = 'Multilevel PCA, HILIC (-), Log2 transformed')
+
+```
+
+
+```{r, fig.width=12, fig.height=12}
+plotLoadings(multilevelPCA.result, ndisplay = 75)
+```
+
+

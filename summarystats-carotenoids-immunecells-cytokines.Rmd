@@ -39,6 +39,7 @@ library(MuMIn) # lmer model testing using AICc
 library(kableExtra)
 library(ggthemes)
 library(ggtext)
+library(ggpubr)
 ```
 
 # Read in data
@@ -546,6 +547,26 @@ yellow_gmcsf_cyto_subset %>%
   summarize(mean_yellow_FC = mean(yellow_FC))
 ```
 
+What about between interventions?
+
+```{r}
+intervention_gmcsf_subset <- meta_cytokines_long %>%
+  filter(intervention != "Baseline") %>%
+  filter(cytokines == "gm_csf") %>%
+  select(patient_id, pre_post_intervention, cytokines, cyto_conc_pg_ml) %>%
+  group_by(cytokines) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(post_intervention_FC = post_Red/post_Yellow)
+
+intervention_gmcsf_subset %>%
+  summarize(mean_intervention_FC = mean(post_intervention_FC),
+            mean_postYellow = mean(post_Yellow),
+            SD_postYellow = sd(post_Yellow),
+            mean_postRed = mean(post_Red),
+            SD_postRed = sd(post_Red))
+```
+
 
 
 #### IL-12p70
@@ -642,6 +663,25 @@ yellow_il_12p70_cyto_subset %>%
 ```
 
 
+What about between interventions?
+
+```{r}
+intervention_il_12p70_subset <- meta_cytokines_long %>%
+  filter(intervention != "Baseline") %>%
+  filter(cytokines == "il_12p70") %>%
+  select(patient_id, pre_post_intervention, cytokines, cyto_conc_pg_ml) %>%
+  group_by(cytokines) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(post_intervention_FC = post_Red/post_Yellow)
+
+intervention_il_12p70_subset %>%
+  summarize(mean_intervention_FC = mean(post_intervention_FC),
+            mean_postYellow = mean(post_Yellow),
+            SD_postYellow = sd(post_Yellow),
+            mean_postRed = mean(post_Red),
+            SD_postRed = sd(post_Red))
+```
 
 #### IL-5
 
@@ -718,7 +758,12 @@ red_il_5_cyto_subset <- meta_cytokines_long %>%
   mutate(red_FC = post_Red/pre_Red)
 
 red_il_5_cyto_subset %>%
-  summarize(mean_red_FC = mean(red_FC))
+  summarize(mean_red_FC = mean(red_FC),
+            SD_red_FC = sd(red_FC),
+            mean_postRed = mean(post_Red),
+            SD_red_postRed = sd(post_Red),
+            mean_preRed = mean(pre_Red),
+            SD_red_preRed = sd(pre_Red))
 
 ```
 
@@ -737,6 +782,26 @@ yellow_il_5_cyto_subset %>%
 ```
 
 
+What about between interventions?
+
+```{r}
+intervention_il_5_subset <- meta_cytokines_long %>%
+  filter(intervention != "Baseline") %>%
+  filter(cytokines == "il_5") %>%
+  select(patient_id, pre_post_intervention, cytokines, cyto_conc_pg_ml) %>%
+  group_by(cytokines) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = cyto_conc_pg_ml) %>%
+  mutate(post_intervention_FC = post_Red/post_Yellow)
+
+intervention_il_5_subset %>%
+  summarize(mean_intervention_FC = mean(post_intervention_FC),
+            mean_postYellow = mean(post_Yellow),
+            SD_postYellow = sd(post_Yellow),
+            mean_postRed = mean(post_Red),
+            SD_postRed = sd(post_Red))
+
+```
 
 ### Correlation w/ carotenoids
 
@@ -916,7 +981,7 @@ intervention_cells_subset %>%
 ```
 
 
-* CD14+ MDSC monocytes shows a huge mean fold change between interventions!
+* CD14+ MDSC monocytes shows a huge mean fold change between interventions! (~ 44)
 
 ## Yellow treatment effects
 

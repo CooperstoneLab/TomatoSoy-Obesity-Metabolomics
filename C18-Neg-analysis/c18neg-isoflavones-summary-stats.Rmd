@@ -34,7 +34,7 @@ Significant = p < 0.05, foldchange > 2
 ```{r}
 #create df with only significant isoflavone features (putative ID)
 isoflavones <- imp_metabind_clust_log2_noQCs %>%
-  select(c(1:11), "201.0227_4.086",
+  dplyr::select(c(1:11), "201.0227_4.086",
                     "201.0228_4.555",
                     "253.0503_5.048",
                     "255.0674_5.078",
@@ -46,6 +46,7 @@ isoflavones <- imp_metabind_clust_log2_noQCs %>%
                     "335.0244_4.36",
                     "363.021_3.933",
                     "363.0234_4.453",
+                    "417.1192_4.5", # added in out of curiosity (equol glucuronide)
                     "429.0815_4.032",
                     "429.082_3.756",
                     "429.083_3.201",
@@ -96,6 +97,7 @@ labs_ppintervention <- c("before\ncontrol",
 335.0244_4.36
 363.021_3.933
 363.0234_4.453
+417.1192_4.5 added 1/23/24 (equol glucuronide)
 429.0815_4.032
 429.082_3.756
 429.083_3.201
@@ -190,7 +192,7 @@ compare_means(rel_abund_log2 ~ pre_post,
 ```
 
 
-```{r}
+```{r, eval=FALSE}
 ggsave("figures/total_isoflavones.svg", total_isoflavones_boxplots, width = 10)
 ```
 
@@ -245,6 +247,29 @@ isoflavones_tidy %>%
 
 
 ### boxplots
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "201.0227_4.086") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of 4-ethylphenol sulfate",
+       subtitle = "matched with standard") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
+
+for ASN conference
 ```{r, fig.width=10}
 # make ethylphenyl sulfate isomer 1 df
 EPS1_tidy <- isoflavones_tidy %>%
@@ -272,7 +297,7 @@ EPS1_tidy$pre_post <- factor(EPS1_tidy$pre_post, levels = c("pre", "post"))
 
 confirmed with authentic standard 
 
-```{r}
+```{r, eval=FALSE}
 ggsave(filename = "figures/4-EPS.svg", plot = EPS1_bps, width = 12)
 ```
 
@@ -367,32 +392,47 @@ isoflavones_tidy %>%
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "297.0975_4.498") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly ethylphenyl glucuronide 1",
-       subtitle = "297.0975_4.498")
+       title = "Relative abundance of \nethylphenol glucuronide isomer",
+       subtitle = "297.0975_4.498") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
 ```
+
 
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "297.0975_4.072") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly ethylphenyl glucuronide 2",
-       subtitle = "297.0975_4.072")
+       title = "Relative abundance of \nethylphenol glucuronide isomer",
+       subtitle = "297.0975_4.072") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
 ```
+
+
 
 
 ## O-DMA glucuronide
@@ -437,34 +477,48 @@ isoflavones_tidy %>%
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "433.113_4.886") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly O-DMA glucuronide 1",
-       subtitle = "433.113_4.886")
+       title = "Relative abundance of \ndaidzein O-DMA glucuronide isomer",
+       subtitle = "433.113_4.886") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
 ```
 
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "433.1136_4.519") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly O-DMA glucuronide 2",
-       subtitle = "433.1136_4.519")
+       title = "Relative abundance of \ndaidzein O-DMA glucuronide isomer",
+       subtitle = "433.1136_4.519") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
 ```
 
-- Patient 6112 looks weird here
+
+
+- Patient 6112: one of their O-dma glucuronides decrease while the other one increases
 
 ## O-DMA
 257.0816_6.056
@@ -492,16 +546,44 @@ isoflavones_tidy %>%
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "257.0816_6.056") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly O-DMA",
-       subtitle = "257.0816_6.056")
+       title = "Relative abundance of O-DMA",
+       subtitle = "257.0816_6.056") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
+
+
+## Equol monoglucuronide (not significant)
+417.1192_4.5
+
+### line graphs
+
+```{r, fig.width=12}
+isoflavones_tidy %>% 
+  filter(mz_rt == "417.1192_4.5") %>%
+  ggplot(aes(x = pre_post, y = rel_abund_log2, color = Intervention)) +
+  geom_point() + 
+  geom_line(aes(group = Intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Possibly equol glucuronide: levels in each patient before/after each intervention",
+       subtitle = "417.1192_4.5")
 ```
 
 ## Daidzein sulfate
@@ -546,32 +628,46 @@ isoflavones_tidy %>%
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "333.0047_4.33") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly daidzein sulfate isomer 1",
-       subtitle = "333.0047_4.33")
+       title = "Relative abundance of \ndaidzein sulfate isomer",
+       subtitle = "333.0047_4.33") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
 ```
 
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "333.0066_3.893") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly daidzein sulfate isomer 2",
-       subtitle = "333.0066_3.893")
+       title = "Relative abundance of \ndaidzein sulfate isomer",
+       subtitle = "333.0066_3.893") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
 ```
+
+
 
 ## Dihydrodaidzein sulfate
 335.0244_4.36
@@ -599,30 +695,252 @@ isoflavones_tidy %>%
 ```{r}
 isoflavones_tidy %>% 
   filter(mz_rt == "335.0244_4.36") %>%
-  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
-  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
-  scale_fill_manual(values = c("Red" = "tomato1",
-                               "Yellow" = "yellow1")) +
-  scale_x_discrete(labels = labs_ppintervention) +
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
   theme_clean(base_size = 18, base_family = "sans") +
   labs(x = "",
        y = "Log2 relative abundance",
-       title = "Possibly dihydrodaidzein",
-       subtitle = "335.0244_4.36")
+       title = "Relative abundance of \ndihydrodaidzein sulfate",
+       subtitle = "335.0244_4.36") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
 ```
-
 
 ## Daidzein glucuronide
 
+### line graph 
+429.083_3.201
+
+```{r, fig.width=12}
+isoflavones_tidy %>% 
+  filter(mz_rt == "429.083_3.201") %>%
+  ggplot(aes(x = pre_post, y = rel_abund_log2, color = Intervention)) +
+  geom_point() + 
+  geom_line(aes(group = Intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Daidzein glucuronide",
+       subtitle = "429.083_3.201")
+```
+
+### boxplots
+
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "429.083_3.201") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of \ndaidzein glucuronide isomer",
+       subtitle = "429.083_3.201") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
+
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "429.082_3.756") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of \ndaidzein glucuronide isomer",
+       subtitle = "429.082_3.756") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
+
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "429.0815_4.032") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of \ndaidzein glucuronide isomer",
+       subtitle = "429.0815_4.032") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
+
 ## Dihydrodaidzein glucuronide
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "431.0979_3.907") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of \ndihydrodaidzein glucuronide",
+       subtitle = "431.0979_3.907") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
 
 ## Daidzein
 
+253.0503_5.048
+
+### line graph 
+
+```{r, fig.width=12}
+isoflavones_tidy %>% 
+  filter(mz_rt == "253.0503_5.048") %>%
+  ggplot(aes(x = pre_post, y = rel_abund_log2, color = Intervention)) +
+  geom_point() + 
+  geom_line(aes(group = Intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Daidzein",
+       subtitle = "253.0503_5.048")
+```
+
+### boxplots
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "253.0503_5.048") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of Daidzein",
+       subtitle = "matched with standard") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
+
+
 ## Dihydrodaidzein
+255.0674_5.078
+
+```{r, fig.width=12}
+isoflavones_tidy %>% 
+  filter(mz_rt == "255.0674_5.078") %>%
+  ggplot(aes(x = pre_post, y = rel_abund_log2, color = Intervention)) +
+  geom_point() + 
+  geom_line(aes(group = Intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(Subject), scales = "free_y") + 
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Dihydrodaidzein",
+       subtitle = "253.0503_5.048")
+```
+
+### boxplots
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "255.0674_5.078") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of Dihydrodaidzein",
+       subtitle = "255.0674_5.078") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
 
 ## Genistein sulfoglucuronide
 
 ## Daidzein sulfoglucuronide
+
+### boxplots
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "509.0409_3.291") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of \ndaidzein sulfoglucuronide",
+       subtitle = "509.0409_3.291") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```
+
+
 
 ## Genistein glucuronide
 
@@ -630,3 +948,27 @@ isoflavones_tidy %>%
 (and/or biochanin a sulfate)
 
 ## Daidzein diglucuronide
+
+### boxplots
+
+
+```{r}
+isoflavones_tidy %>% 
+  filter(mz_rt == "605.1126_3.023") %>%
+  ggpaired(x = "pre_post", y = "rel_abund_log2", fill = "Intervention",
+           line.color = "gray", 
+           line.size = 1, 
+           facet.by = "Intervention", 
+           short.panel.labs = FALSE, panel.labs = list(Intervention = c("", ""))) +
+  scale_fill_manual(values = c("Yellow" = "yellow1",
+                               "Red" = "tomato1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = Subject), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Relative abundance of \ndaidzein diglucuronide",
+       subtitle = "605.1126_3.023") +
+   stat_compare_means(method = "t.test", paired = TRUE) 
+```

@@ -1,0 +1,585 @@
+---
+title: "Linear mixed effect modeling for USDA clinical trial"
+output: html_document
+date: '2022-05-17'
+---
+
+
+# Load libraries
+```{r}
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(corrr)
+library(rstatix)
+library(lme4)
+library(knitr)
+library(lmerTest)
+library(purrr)
+library(broom.mixed)
+library(MuMIn)
+```
+
+
+# Read in data
+```{r}
+# load data
+meta_table <- read_excel("CompiledData_Results_Meta.xlsx",
+                         sheet = "metadata_corrected_withsequence")
+glimpse(meta_table)
+
+# clean up variable names 
+meta_table <- clean_names(meta_table)
+glimpse(meta_table)
+
+```
+
+## Wrangle
+Convert variables that should be factors to factors
+```{r}
+meta_table <- meta_table %>%
+  mutate(across(.cols = c("patient_id", "period", 
+                          "intervention", "intervention_week", 
+                          "pre_post", "sex", "sequence"),
+                .fns = as.factor))
+glimpse(meta_table)
+
+# some stuff came in as characters but should be numeric
+meta_table <- meta_table %>%
+  mutate(across(.cols = c(10:89),
+                .fns = as.numeric))
+
+glimpse(meta_table)
+
+# changing factor levels for pre_post
+meta_table$pre_post <- factor(meta_table$pre_post,
+                              levels = c("pre", "post"))
+
+levels(meta_table$pre_post)                       
+
+?fct_reorder
+```
+
+
+
+```{r}
+# Calculate total_cis_lyc, total_lyc, and total_carotenoids
+meta_table <- meta_table %>%
+  mutate(total_cis_lyc = other_cis_lyc + x5_cis_lyc,
+         total_lyc = all_trans_lyc + total_cis_lyc,
+         total_carotenoids = lutein + zeaxanthin + b_cryptoxanthin + 
+                             a_carotene + b_carotene + total_lyc)
+
+glimpse(meta_table)
+```
+
+
+```{r}
+# convert from wide to long
+meta_table_long <- meta_table %>%
+  pivot_longer(cols = if_ng:il_4,
+               names_to = "cytokines",
+               values_to = "cyto_conc_pg_ml")
+```
+
+
+Let's remove subject 6112 from the yellow intervention, since their total lycopene levels is the only one increasing post-Yellow. This could affect our modeling.
+
+```{r}
+subj6112_yellow <- meta_table_long %>%
+  filter(patient_id == 6112) %>%
+  filter(intervention == "Yellow")
+
+meta_table_long_rm_outlier <- anti_join(meta_table_long, 
+                                            subj6112_yellow)
+  
+```
+
+
+# Linear mixed modeling
+
+While paired t-tests do account for within-subject variation, it doesn't simply factor in other things that may be contributing to the outcome (cytokine levels) such as carotenoid levels, intervention type, sex, etc. 
+
+
+```{r}
+# filter for only il_5 cytokines and remove immune cell data
+long_il5 <- meta_table_long_rm_outlier[-c(10:66)] %>%
+  filter(cytokines == "il_5")
+
+```
+
+## IL5 Test models
+
+*in order to compare models, set REML=FALSE because it is necessary when comparing models using likelihood ratio test (pulled from bw_LME_tutorial2.pdf: Pinheiro & Bates, 2000; Bolker et. al., 2009)*
+
+*also note that when comparing models, if one model has a random slope, then the others must have one as well*
+
+Reading outputs
+  -Random effects:
+    - std dev is measuring how much the random effects contribute to the variability of the dependent measure (e.g, cytokine response)
+    - residual st.dev is the variability not explained by any of the random effects
+  
+  -Fixed effects:
+    - Coefficient estimate for fixed effect variables represents the slope for the categorical effect for that variable. The reference variable is the first one in alhabetical order. (e.g, 3.4 is the coefficient for sexM. this means that from female to male, il_5 response goes up by 3.4 units. According to that data, male IL5 levels are on average higher than female response by about 3.4 units).
+    - t-value is the estimate divided by the standard error
+    - Intercept: the average of the data for the reference variable (alphabetical order)
+
+- What are we looking for in these models?? 
+  -The effect of high lycopene and soy vs. low lycopene tomato juice on cytokine conc levels 
+  -We also want to check for order effects and account for them in our models
+  -Which variables do we KNOW are random effects and which are fixed effects?
+    -Fixed: sex, intervention, sequence
+    -Random: patient, carotenoid levels 
+  
+
+
+### AICc model testing
+
+AICc = corrected Akaike's information criterion (AIC), used for small sample sizes (when n/k <40)
+- use AICc when n/k < 40. 
+    - n = total observations
+    - k = total number of parameters in model with most parameters
+When comparing models, the model with the lowest AICc is the best model.
+
+REML = False when testing fixed effect structure
+REML = True when testing random effect structure
+
+Helpful site: https://uoftcoders.github.io/rcourse/lec09-model-selection.html
+
+### Intervention comp
+
+```{r}
+long_il5_post <- long_il5 %>%
+  filter(pre_post == "post")
+```
+
+
+```{r}
+il5_model1 <- lmer(cyto_conc_pg_ml ~ intervention + total_lyc + (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model2 <- lmer(cyto_conc_pg_ml ~ intervention + (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model3 <- lmer(cyto_conc_pg_ml ~  (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model4 <- lmer(cyto_conc_pg_ml ~  intervention + (pre_post|patient_id), data = long_il5, REML = FALSE)
+
+il5_model5 <- lmer(cyto_conc_pg_ml ~  intervention + pre_post + (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model6 <- lmer(cyto_conc_pg_ml ~  pre_post + (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model7 <- lmer(cyto_conc_pg_ml ~  intervention + age_at_enrollment + (pre_post|patient_id), data = long_il5, REML = FALSE)
+
+il5_model8 <- lmer(cyto_conc_pg_ml ~  intervention + age_at_enrollment + sex + (pre_post|patient_id), data = long_il5, REML = FALSE)
+
+il5_model9 <- lmer(cyto_conc_pg_ml ~  intervention + age_at_enrollment + sex + bmi_at_enrollment + (pre_post|patient_id), data = long_il5, REML = FALSE)
+
+il5_model10 <- lmer(cyto_conc_pg_ml ~  intervention + total_lyc + (pre_post|patient_id), data = long_il5, REML = FALSE)
+
+il5_model11 <- lmer(cyto_conc_pg_ml ~ total_lyc*sex + intervention + (pre_post|patient_id), data = long_il5, REML = FALSE)
+
+il5_model12 <- lmer(cyto_conc_pg_ml ~ total_lyc*sex + intervention + pre_post + (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model13 <- lmer(cyto_conc_pg_ml ~ total_lyc*sex + intervention*pre_post + (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model14 <- lmer(cyto_conc_pg_ml ~ pre_post*intervention + (1|patient_id), data = long_il5, REML = FALSE)
+
+il5_model15 <- lmer(cyto_conc_pg_ml ~ intervention + (pre_post|patient_id), data = long_il5, REML = FALSE)
+
+AICc(il5_model1,
+     il5_model2,
+     il5_model3,
+     il5_model4,
+     il5_model5,
+     il5_model6,
+     il5_model7,
+     il5_model8,
+     il5_model9,
+     il5_model10,
+     il5_model11,
+     il5_model12,
+     il5_model13,
+     il5_model14,
+     il5_model15)
+
+
+
+AICc(il5_model15, il5_model6)
+```
+
+```{r}
+
+il5_model4_tidy <- tidy(il5_model4)
+
+tidy(il5_model13)
+tidy(il5_model15)
+```
+
+
+### Red comp
+
+```{r}
+long_il5_red <- long_il5 %>%
+  filter(intervention == "Red")
+```
+
+
+```{r}
+il5_red_model1 <- lmer(cyto_conc_pg_ml ~  pre_post*sex + (1|patient_id), data = long_il5_red, REML = FALSE)
+
+il5_red_model2 <- lmer(cyto_conc_pg_ml ~ total_lyc + pre_post + (1|patient_id), data = long_il5_red, REML = FALSE)
+
+il5_red_model3 <- lmer(cyto_conc_pg_ml ~  pre_post + (1|patient_id), data = long_il5_red, REML = FALSE)
+
+il5_red_model4 <- lmer(cyto_conc_pg_ml ~  (1|patient_id), data = long_il5_red, REML = FALSE)
+
+AICc(il5_red_model1,
+     il5_red_model2,
+     il5_red_model3,
+     il5_red_model4)
+
+
+```
+
+```{r}
+# varying slopes and intercepts for each subject
+il5_red_model_full <- lmer(cyto_conc_pg_ml ~ pre_post + (total_lyc|patient_id), data = long_il5_red, REML = FALSE)
+
+# varying intercept per subject
+il5_red_model_reduced <- lmer(cyto_conc_pg_ml ~ pre_post + (1|patient_id), data = long_il5_red, REML = FALSE)
+
+```
+
+
+## New model function
+Let's try the interaction model with all of the cytokines 
+```{r}
+# lmer model function 
+new_fit_model <- function(long_il5_red) {
+  lmer(cyto_conc_pg_ml ~ pre_post + (1|patient_id), data = long_il5_red, REML = TRUE)
+}
+
+# break data up into subsets based on cytokine and apply function to each subset
+new_models <- map(split(long_il5_red,
+                             long_il5_red$cytokines),
+                   new_fit_model)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+new_results <- map_df(new_models,
+                       tidy,
+                       .id = "cytokines")
+
+```
+*With this model, IL-5 is the only cytokine that is significantly changed with pre_post as fixed effect*
+
+My next steps are to figure out if there is a way to test all variables automatically for an entire function. Is this necessary? Is it okay to have different models for different cytokines? I'm thinking it's not. So how do I conclude whether or not this model is sufficient to claim as final model?
+**can look at correlation plots with sex and pre_post but we'll stick with just pre_post model**
+
+12/4/23 - I was asked to try subject as a fixed effect. I don't think this makes sense as it defeats the purpose of accounting for interindividual variations, but I will try it anyways. 
+
+```{r}
+# lmer model function 
+test_fit_model <- function(long_il5) {
+  lm(cyto_conc_pg_ml ~ pre_post + patient_id, data = long_il5)
+}
+
+# break data up into subsets based on cytokine and apply function to each subset
+test_models <- map(split(long_il5,
+                             long_il5$cytokines),
+                   test_fit_model)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+test_results <- map_df(test_models,
+                       tidy,
+                       .id = "cytokines")
+
+```
+This gives me results for every subject, which isn't helpful since we want statistics for the aggregate data.
+
+
+## Immune cell functions
+
+### Null model
+
+```{r}
+# using long data set for immune cells
+meta_table_long2 <- meta_table[-c(10:24)] %>%
+  select(c(1:9, lutein:total_carotenoids, contains("x"))) %>%
+  pivot_longer(cols = x01_cd45_cd66b_lymph_dc_mono:x40_cd14_mdsc_mono,
+               names_to = "cell_type",
+               values_to = "value")
+  
+
+# lmer model function
+cells_null_function <- function(meta_table_long2) {
+  lmer(value ~ (1|patient_id), data = meta_table_long2, REML = FALSE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cells_null_models <- map(split(meta_table_long2,
+                             meta_table_long2$cell_type),
+                   cells_null_function)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+cells_null_results <- map_df(cells_null_models,
+                       tidy,
+                       .id = "cell_type")
+cells_null_results_coefonly <- cells_null_results %>%
+  filter(effect == "fixed")
+
+```
+
+### Sequence carryover check
+
+```{r}
+
+# lmer model function
+cells_carryover_function <- function(meta_table_long2) {
+  lmer(value ~ sequence + (1|patient_id), data = meta_table_long2, REML = FALSE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cells_carryovertest_models <- map(split(meta_table_long2,
+                             meta_table_long2$cell_type),
+                   cells_carryover_function)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+cells_carryovertest_results <- map_df(cells_carryovertest_models,
+                       tidy,
+                       .id = "cell_type")
+
+cells_carryovertest_results_coef <- cells_carryovertest_results %>%
+  filter(effect == "fixed") %>%
+  filter(term == "sequenceY_R")
+
+
+```
+
+**No carryover effect**
+
+### Both interventions
+
+```{r}
+# change carotenoid units to nmol/ul
+long_cells_meta_scaled <- meta_table_long2 %>%
+  mutate_at(vars(lutein:total_carotenoids),
+            .funs = funs(. / 1000))
+
+# lmer model function 
+cells_fit_model <- function(long_cells_meta_scaled) {
+  lmer(value ~ pre_post + (1|patient_id), data = long_cells_meta_scaled, REML = FALSE)
+}
+
+# break data up into subsets based on immune cell and apply function to each subset
+cells_models <- map(split(long_cells_meta_scaled,
+                             long_cells_meta_scaled$cell_type),
+                   cells_fit_model)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+
+cells_results <- map_df(cells_models,
+                       tidy,
+                       .id = "value")
+
+cells_results_coef <- cells_results %>%
+  filter(effect == "fixed") %>%
+  filter(term == "pre_postpost")
+
+# extract significant immune cells (p val < 0.05)
+
+cells_prepost_psig <- cells_results_coef %>%
+  filter(cells_results_coef$p.value < 0.05)
+
+print(cells_prepost_psig$value)
+```
+
+### Red intervention
+
+```{r}
+# change carotenoid units to nmol/ul
+long_cells_red_meta_scaled <- meta_table_long2 %>%
+  filter(intervention == "Red") %>%
+  mutate_at(vars(lutein:total_carotenoids),
+            .funs = funs(. / 1000))
+
+# lmer model function 
+red_cells_fit_model <- function(long_cells_red_meta_scaled) {
+  lmer(value ~ pre_post + (1|patient_id), data = long_cells_red_meta_scaled, REML = FALSE)
+}
+
+# break data up into subsets based on immune cell and apply function to each subset
+red_cells_models <- map(split(long_cells_red_meta_scaled,
+                             long_cells_red_meta_scaled$cell_type),
+                   red_cells_fit_model)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+
+red_cells_results <- map_df(red_cells_models,
+                       tidy,
+                       .id = "value")
+
+red_cells_results_coef <- red_cells_results %>%
+  filter(effect == "fixed") %>%
+  filter(term == "pre_postpost")
+
+# extract significant immune cells (p val < 0.05)
+
+red_cells_prepost_psig <- red_cells_results_coef %>%
+  filter(red_cells_results_coef$p.value < 0.05)
+
+print(red_cells_prepost_psig$value)
+```
+
+### Yellow intervention
+**I am getting an error when I try to create the model: 0(non-NA) cases**
+```{r}
+# change carotenoid units to nmol/ul
+long_cells_yellow_meta_scaled <- meta_table_long2 %>%
+  filter(intervention == "Yellow") %>%
+  mutate_at(vars(lutein:total_carotenoids),
+            .funs = funs(. / 1000))
+
+# lmer model function 
+yellow_cells_fit_model <- function(long_cells_yellow_meta_scaled) {
+  lmer(value ~ pre_post + (1|patient_id), data = long_cells_yellow_meta_scaled, REML = FALSE)
+}
+
+# break data up into subsets based on immune cell and apply function to each subset
+yellow_cells_models <- map(split(long_cells_yellow_meta_scaled,
+                             long_cells_yellow_meta_scaled$cell_type),
+                   yellow_cells_fit_model)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+
+yellow_cells_results <- map_df(yellow_cells_models,
+                       tidy,
+                       .id = "value")
+
+yellow_cells_results_coef <- yellow_cells_results %>%
+  filter(effect == "fixed") %>%
+  filter(term == "pre_postpost")
+
+# extract significant immune cells (p val < 0.05)
+
+yellow_cells_prepost_psig <- yellow_cells_results_coef %>%
+  filter(yellow_cells_results_coef$p.value < 0.05)
+
+print(yellow_cells_prepost_psig$value)
+```
+
+### AICc model comparisons
+
+#### ccr7_cd8_2
+
+```{r}
+# create data frame with ccr7_cd8_2 only
+long_ccr7_cd8_2 <- long_cells_meta_scaled %>%
+  filter(cell_type == "x15_cd45ro_cd45ra_te_cd4")
+
+#optimizing fixed effect structure
+
+# saturated model for ccr7_cd8_2 with no interactions
+ccr7_cd8_2_saturated_noint <- lmer(value ~ pre_post + intervention + total_carotenoids + total_lyc + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_saturated_noint_tidy <- tidy(ccr7_cd8_2_saturated_noint)
+
+# saturated model 2 for ccr7_cd8_2 with no interactions
+ccr7_cd8_2_saturated2_noint <- lmer(value ~ pre_post + intervention + total_lyc + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_saturated2_noint_tidy <- tidy(ccr7_cd8_2_saturated2_noint)
+
+# saturated model 3 for ccr7_cd8_2 with no interactions
+ccr7_cd8_2_saturated3_noint <- lmer(value ~ pre_post + intervention + total_carotenoids + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_saturated3_noint_tidy <- tidy(ccr7_cd8_2_saturated3_noint)
+
+# saturated model 4 for ccr7_cd8_2 with no interactions
+ccr7_cd8_2_saturated4_noint <- lmer(value ~ pre_post + intervention + total_lyc + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_saturated4_noint_tidy <- tidy(ccr7_cd8_2_saturated4_noint)
+
+# model 5, pre_post and intervention for ccr7_cd8_2 with no interactions
+ccr7_cd8_2_model5_noint <- lmer(value ~ pre_post + intervention + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_saturated4_noint_tidy <- tidy(ccr7_cd8_2_model5_noint)
+
+# model 6, pre_post and intervention for ccr7_cd8_2 as interactions
+ccr7_cd8_2_model6_int <- lmer(value ~ pre_post*intervention + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_model6_int_tidy <- tidy(ccr7_cd8_2_model6_int)
+
+# model 7, pre_post and intervention for ccr7_cd8_2 as interactions + total carotenoids
+ccr7_cd8_2_model7_int <- lmer(value ~ pre_post*intervention + total_carotenoids + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_model7_int_tidy <- tidy(ccr7_cd8_2_model7_int)
+
+# model 8, pre_post and intervention for ccr7_cd8_2 as interactions + total lyc
+ccr7_cd8_2_model8_int <- lmer(value ~ pre_post*intervention + total_lyc + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_model8_int_tidy <- tidy(ccr7_cd8_2_model8_int)
+
+# model 9, pre_post and intervention for ccr7_cd8_2 as interactions + total_lyc*total_carot as interactions 
+ccr7_cd8_2_model9_int <- lmer(value ~ pre_post*intervention + total_lyc*total_carotenoids + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_model9_int_tidy <- tidy(ccr7_cd8_2_model9_int)
+
+# model 10, pre_post only 
+ccr7_cd8_2_model10 <- lmer(value ~ pre_post + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_model10_tidy <- tidy(ccr7_cd8_2_model10)
+
+# model 11, null 
+ccr7_cd8_2_null <- lmer(value ~ (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_null_tidy <- tidy(ccr7_cd8_2_null)
+
+# model 12, intervention only
+ccr7_cd8_2_model11 <- lmer(value ~ intervention + (1|patient_id), data = long_ccr7_cd8_2, REML = FALSE)
+ccr7_cd8_2_model11_tidy <- tidy(ccr7_cd8_2_model11)
+
+AICc(ccr7_cd8_2_saturated_noint,
+     ccr7_cd8_2_saturated2_noint,
+     ccr7_cd8_2_saturated3_noint,
+     ccr7_cd8_2_saturated4_noint,
+     ccr7_cd8_2_model5_noint,
+     ccr7_cd8_2_model6_int,
+     ccr7_cd8_2_model7_int,
+     ccr7_cd8_2_model8_int,
+     ccr7_cd8_2_model9_int,
+     ccr7_cd8_2_model10,
+     ccr7_cd8_2_model11,
+     ccr7_cd8_2_null)
+
+```
+
+**pre_post model is the best model. I think I'll just go with this for the rest of the immune cells in both interventions.**
+
+
+
+
+## Carotenoids as outcome
+```{r}
+
+# does the model show a difference between lycopene absorption in the 2 different interventions?
+lm.lyc <- lmer(total_lyc ~ intervention + (1|patient_id), meta_table)
+lm.lyc.tidy <- tidy(lm.lyc)
+## not significant. Probably because baseline is being included as intervention
+
+# what about with intervention and pre_post as interactions
+lm.lyc2 <- lmer(total_lyc ~ intervention*pre_post + (1|patient_id), meta_table)
+lm.lyc2.tidy <- tidy(lm.lyc2)
+## intervention and pre_post as interaction is very significant (pval 0.0002).On avg, total lyc levels from red to yellow (with pre_post as interaction) go down on average 800 nmol/mL.
+
+# does sex as a variable have an effect on lycopene absorption
+lm.lyc3 <- lmer(total_lyc ~ sex + (1|patient_id), meta_table)
+lm.lyc3.tidy <- tidy(lm.lyc3)
+## not significant
+
+# what about sex and intervention*pre_post?
+lm.lyc4 <- lmer(total_lyc ~ sex + intervention*pre_post + (1|patient_id), meta_table)
+lm.lyc4.tidy <- tidy(lm.lyc4)
+## sex is still not significant
+
+# sequence effect?
+lm.lyc.seqeffects <- lmer(total_lyc ~ sequence + (1|patient_id), meta_table)
+lm.lyc.seqeffects.tidy <- tidy(lm.lyc.seqeffects)
+## no effect
+
+# sequence*interaction?
+lm.lyc.seqeffects2 <- lmer(total_lyc ~ sequence*intervention + (1|patient_id), meta_table)
+lm.lyc.seqeffects2.tidy <- tidy(lm.lyc.seqeffects2)
+## no effect
+
+# sequence + interaction?
+lm.lyc.seqeffects3 <- lmer(total_lyc ~ sequence + intervention + (1|patient_id), meta_table)
+lm.lyc.seqeffects3.tidy <- tidy(lm.lyc.seqeffects3)
+## no effect
+```

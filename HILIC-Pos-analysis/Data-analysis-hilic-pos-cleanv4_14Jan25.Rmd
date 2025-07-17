@@ -1,0 +1,3405 @@
+---
+title: "USDA Inflammation Metabolomics Data analysis"
+subtitle: "Urine, HILIC(+) LCMS"
+author: "Maria Sholola"
+date: '2023-06-05'
+output: 
+  html_document:
+    highlight: kate
+    theme: yeti
+    toc: true
+    toc_float: true
+    toc_depth: 5
+    code_download: true
+    fig_width: 7
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo=TRUE) 
+```
+
+# Load libraries
+```{r, warning = FALSE, message = FALSE}
+library(readxl) # for reading in excel files
+library(janitor) # data checks and cleaning
+library(glue) # for easy pasting
+library(FactoMineR) # for PCA
+library(factoextra) # for PCA
+library(rstatix) # for stats
+library(pheatmap) # for heatmaps
+library(plotly) # for interactive plots
+library(htmlwidgets) # for saving interactive plots
+library(devtools)
+library(notame) # used for feature clustering
+library(doParallel)
+library(igraph) # feature clustering
+library(ggpubr) # visualizations
+library(knitr) # clean table printing
+library(rmarkdown)
+library(mixOmics) # for multilevel PCAs
+library(pathview) # for functional analysis and KEGG annotation
+library(ggcorrplot)
+library(corrr)
+library(corrplot)
+library(ggthemes)
+library(ggpmisc) # annotating scatter plots
+library(PCAtools)
+library(tidyverse) # for everything
+```
+
+# Read in data
+```{r}
+# raw filtered metabolomics data in HILIC (+)
+omicsdata <- read_csv("Feature lists/HILIC-POS-Filtered-Data-05Jun23_1444features.csv")
+
+# metadata
+metadata <- read_excel("Metadata-urine-HILIC-POS.xlsx")
+```
+
+# Wrangle data
+
+```{r}
+metadata <- metadata %>%
+  rename("sample_ID" = Sample_ID)
+```
+
+
+```{r}
+# rename "row ID"
+omicsdata <- omicsdata %>%
+  rename("row_ID" = `row ID`)
+
+# how many features
+nrow(omicsdata)
+
+# are there any duplicates?
+omicsdata %>% get_dupes(mz_rt)
+
+```
+
+```{r}
+# remove dupes
+omicsdata <- omicsdata %>% 
+  distinct(mz_rt, .keep_all = TRUE)
+
+# check again for dupes
+omicsdata %>% get_dupes(mz_rt)
+
+# how many features
+nrow(omicsdata)
+```
+Sometimes a weird logical column (lgl) comes up in my data. Let's check if it's there
+
+```{r}
+colnames(omicsdata)
+```
+
+
+```{r}
+# remove weird lgl column
+omicsdata <- omicsdata %>%
+  dplyr::select(!where(is.logical))
+
+colnames(omicsdata)
+```
+
+
+
+```{r}
+# create long df for omics df
+omicsdata_tidy <- omicsdata %>%
+  pivot_longer(cols = 3:ncol(.),
+               names_to = "sample_ID",
+               values_to = "peak_height")
+
+# combine meta and omics dfs
+df_combined <- full_join(omicsdata_tidy,
+                         metadata,
+                         by = c("sample_ID" = "sample_ID"))
+
+# separate mz and rt
+df_combined_sep <- df_combined %>%
+  separate(col = mz_rt,
+           into = c("mz", "rt"),
+           sep = "_") 
+
+# convert columns to correct type
+df_combined_sep$mz <- as.numeric(df_combined_sep$mz)
+df_combined_sep$rt <- as.numeric(df_combined_sep$rt)
+df_combined_sep$Subject <- as.character(df_combined_sep$Subject)
+df_combined_sep$Intervention <- as.character(df_combined_sep$Intervention)
+
+# rearrange column order
+df_combined_sep <- df_combined_sep %>%
+  dplyr::select(sample_ID, pre_post, Intervention, everything())
+
+str(df_combined_sep)
+
+# replace NA's in subject and intervention columns with QC
+df_combined_sep$Subject <- df_combined_sep$Subject %>%
+  replace_na("QC")
+
+df_combined_sep$Intervention <- df_combined_sep$Intervention %>%
+  replace_na("QC")
+
+
+```
+
+# Data summaries
+
+## Number of masses detected
+```{r}
+nrow(omicsdata)
+```
+
+
+## Mass range for metabolites detected?
+
+```{r}
+range(df_combined_sep$mz)
+```
+
+## RT range for metabolites detected?
+
+```{r}
+range(df_combined_sep$rt)
+```
+
+## mass vs RT scatterplot
+```{r}
+# plot
+(plot_mzvsrt <- df_combined_sep %>%
+  ggplot(aes(x = rt, y = mz)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "Retention time, min",
+       y = "m/z, neutral",
+       title = "mz across RT for all features"))
+```
+
+## Histogram for mass range
+```{r}
+df_combined_sep %>%
+  ggplot(aes(x = mz)) +
+  geom_histogram(binwidth = 25) +
+  theme_minimal() +
+  labs(x = "Monoisotopic mass (amu)",
+       y = "Number of features",
+       title = "Distribution of features by mass")
+```
+
+## Histogram for RT
+
+```{r}
+df_combined_sep %>%
+  ggplot(aes(x = rt)) +
+  geom_histogram(binwidth = 0.1) + # 6 second bins
+  theme_minimal() +
+  labs(x = "Retention time",
+       y = "Number of features",
+       title = "Distribution of features by retention time")
+```
+
+
+# NAs and imputing
+
+## NAs
+```{r}
+# NAs in all data including QCs
+NAbyRow <- rowSums(is.na(omicsdata[,-1]))
+
+hist(NAbyRow,
+     breaks = 56, # because there are 56 samples, 48 samples + 8 QCs
+     xlab = "Number of missing values",
+     ylab = "Number of metabolites",
+     main = "How many missing values are there?")
+```
+
+```{r}
+# samples only (no QCs)
+omicsdata_noQC <- omicsdata %>%
+  dplyr::select(-contains("QC"))
+
+#NAs in samples only?
+NAbyRow_noQC <- rowSums(is.na(omicsdata_noQC[,-1]))
+
+hist(NAbyRow_noQC,
+     breaks = 48, # because there are 48 samples 
+     xlab = "Number of missing values",
+     ylab = "Number of metabolites",
+     main = "How many missing values are there?")
+```
+
+Are there any missing values in QCs? There shouldn't be after data preprocessing/filtering
+```{r}
+omicsdata_QC <- omicsdata %>%
+  dplyr::select(starts_with("P")) 
+
+NAbyRow_QC <- colSums(is.na(omicsdata_QC))
+# lets confirm that there are no missing values from my QCs
+sum(NAbyRow_QC) # no
+```
+
+
+```{r}
+# calculate how many NAs there are per feature in whole data set
+contains_NAs <- df_combined %>%
+  group_by(mz_rt) %>%
+  count(is.na(peak_height)) %>%
+  filter(`is.na(peak_height)` == TRUE)
+head(contains_NAs)
+```
+
+
+
+
+## Remove NAs
+
+Update May 3, 2023: I've been seeing outliers in unsupervised analyses. So to handle this, I think it is best to filter out metabolites that are only present in one person. So I will remove metabolites that are missing from at least 44 samples. Taking this out for now. 
+
+```{r, eval=FALSE}
+# remove features that have 44 or more NAs
+omit_features <- contains_NAs %>%
+  filter(n >= 44)
+#preview
+nrow(omit_features) # 109 features to remove
+
+# how many features to remove?
+nrow(omicsdata) - nrow(omit_features)
+
+# now remove these features from the omics dataset
+omicsdata <- omicsdata %>%
+  anti_join(omit_features,
+            by = "mz_rt")
+
+ # how many features are there now?
+nrow(omicsdata)
+```
+
+
+## Data imputation
+```{r}
+# impute any missing values by replacing them with 1/2 of the lowest peak height value of a feature (i.e. in a row).
+imputed_omicsdata <- omicsdata
+
+imputed_omicsdata[] <- lapply(imputed_omicsdata, 
+                              function(x) ifelse(is.na(x),
+                                                 min(x, na.rm = TRUE)/2, x))
+
+dim(imputed_omicsdata)
+```
+
+Are there any NAs?
+```{r}
+imputed_omicsdata %>%
+  is.na() %>%
+  sum()
+
+# imputations worked
+```
+
+
+# Create new imputed tidy datasets
+```{r}
+# create long df for imputed omics df
+imputed_omicsdata_tidy <- imputed_omicsdata %>%
+  pivot_longer(cols = 3:ncol(.),
+               names_to = "sample_ID",
+               values_to = "peak_height")
+
+# combine meta and imputed omics dfs
+imputed_fulldata <- full_join(imputed_omicsdata_tidy,
+                         metadata,
+                         by = c("sample_ID" = "sample_ID"))
+
+# separate mz and rt
+imputed_fulldata_sep <- imputed_fulldata %>%
+  separate(col = mz_rt,
+           into = c("mz", "rt"),
+           sep = "_") 
+
+# convert columns to correct type
+imputed_fulldata_sep$mz <- as.numeric(imputed_fulldata_sep$mz)
+imputed_fulldata_sep$rt <- as.numeric(imputed_fulldata_sep$rt)
+imputed_fulldata_sep$Subject <- as.character(imputed_fulldata_sep$Subject)
+imputed_fulldata_sep$Intervention <- as.character(imputed_fulldata_sep$Intervention)
+```
+
+
+# Notame feature reduction
+vignette for reference
+```{r}
+#browseVignettes("notame")
+```
+
+## Plot features. RT vs mz before notame
+```{r}
+# rt vs mz plot
+imputed_fulldata_sep %>%
+  ggplot(aes(x = rt, y = mz)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "RT (min)",
+       y = "mz")
+```
+
+
+## Data restructuring for notame
+```{r}
+# create features list from imputed data set to only include unique feature ID's (mz_rt), mz and RT
+features <- imputed_fulldata_sep %>%
+  cbind(imputed_fulldata$mz_rt) %>%
+  rename("mz_rt" = "imputed_fulldata$mz_rt") %>%
+  dplyr::select(c(mz_rt, mz, rt)) %>%
+  distinct() # remove the duplicate rows
+
+# create a second data frame which is just imputed_fulldata restructured to another wide format
+data_notame <- data.frame(imputed_omicsdata %>%
+                            dplyr::select(-row_ID) %>%
+                            t())
+
+data_notame <- data_notame %>%
+  tibble::rownames_to_column() %>% # change samples from rownames to its own column
+  row_to_names(row_number = 1) # change the feature IDs (mz_rt) from first row obs into column names
+
+
+```
+
+Check structures
+```{r}
+# check if mz and rt are numeric
+str(features)
+tibble(features)
+```
+
+```{r}
+# check if results are numeric
+tibble(data_notame)
+
+# change to results to numeric
+data_notame <- data_notame %>%
+  mutate_at(-1, as.numeric)
+
+tibble(data_notame)
+```
+
+
+## Find connections
+```{r}
+connection <- find_connections(data = data_notame,
+                               features = features,
+                               corr_thresh = 0.9,
+                               rt_window = 1/60,
+                               name_col = "mz_rt",
+                               mz_col = "mz",
+                               rt_col = "rt")
+
+head(connection)
+```
+
+## Clustering
+```{r}
+clusters <- find_clusters(connections = connection, d_thresh = 0.8)
+```
+
+```{r}
+# assign a cluster ID to all features. Clusters are named after feature with highest median peak height
+features_clustered <- assign_cluster_id(data_notame, clusters, features, name_col = "mz_rt")
+
+
+# visualize clusters
+#visualize_clusters(data_notame, features, clusters, min_size = 3, rt_window = 2,name_col = "mz_rt", mz_col = "mz", rt_col = "rt", file_path = "~/path/to/project/")
+
+# lets see how many features are removed when we only keep one feature per cluster
+pulled <- pull_clusters(data_notame, features_clustered, name_col = "mz_rt")
+cluster_data <- pulled$cdata
+
+cluster_features <- pulled$cfeatures
+# export clustered feature list
+write_csv(cluster_features,
+          "cluster_features-_hilic-pos.csv")
+
+nrow(omicsdata) - nrow(cluster_features)
+```
+
+## Reduce dataset based on clustering
+```{r}
+# transpose the full dataset back to wide so that it is more similar to the notame dataset
+imputed_fulldata_wide <- imputed_fulldata %>%
+  dplyr::select(-"row_ID") %>%
+  pivot_wider(names_from = mz_rt,
+              values_from = peak_height)
+
+# list of reduced features
+clusternames <- cluster_features$mz_rt
+
+# dplyr::select only the features are in the reduced list
+imp_clust <- imputed_fulldata_wide[,c(names(imputed_fulldata_wide) %in% clusternames)]
+
+# bind back sample names
+imp_clust <- cbind(imputed_fulldata_wide[1], imp_clust)
+
+tibble(imp_clust)
+
+```
+
+## Mz vs RT scatterplot 
+
+```{r}
+# plot new rt vs mz scatterplot post-clustering
+(plot_mzvsrt_postcluster <- cluster_features %>%
+  ggplot(aes(x = rt,
+             y = mz)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "Retention time, min",
+       y = "m/z, neutral",
+       title = "mz across RT for all features after clustering"))
+
+
+```
+
+
+```{r}
+# plot both scatterplots to compare with and without notame clustering
+(scatterplots <- ggarrange(plot_mzvsrt, 
+                           plot_mzvsrt_postcluster, 
+                           nrow = 2))
+```
+
+# Bind meta data
+```{r}
+imp_metabind_clust <- right_join(metadata, 
+                                 imp_clust,
+                                 by = "sample_ID")
+```
+
+# Visualize untransformed data
+
+## Data wrangling
+```{r}
+# change meta data columns to character so that I can change NAs from QCs to "QC"
+imp_metabind_clust <- imp_metabind_clust %>%
+  mutate_at(c("Subject",
+              "Period",
+              "Intervention",
+              "pre_post",
+              "sequence",
+              "Intervention_week",
+              "Sex",
+              "Age",
+              "BMI"),
+            as.character) 
+
+# replace NAs in metadata columns for QCs
+imp_metabind_clust[is.na(imp_metabind_clust)] <- "QC"
+
+# unite pre_post column with intervention column to create pre_intervention column
+imp_metabind_clust <- imp_metabind_clust %>%
+  unite(col = "pre_post_intervention",
+        c("pre_post","Intervention"),
+        sep = "_",
+        remove = FALSE)
+
+# long df
+imp_metabind_clust_tidy <- imp_metabind_clust %>%
+  pivot_longer(cols = 12:ncol(.),
+               names_to = "mz_rt",
+               values_to = "rel_abund")
+
+# structure check
+str(imp_metabind_clust_tidy)
+```
+
+
+## Boxplot
+```{r}
+imp_metabind_clust_tidy %>%
+  ggplot(aes(x = sample_ID, y = rel_abund, color = Intervention)) +
+  geom_boxplot(alpha = 0.6) +
+  scale_color_manual(values = c("light grey", "tomato1", "gold")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "LC-MS (+) Feature Abundances by Sample",
+       subtitle = "Unscaled data",
+       y = "Relative abundance")
+```
+Will need to log transform in order to normalize and actually see the data
+
+# Log2 transform
+```{r}
+imp_metabind_clust_tidy_log2 <- imp_metabind_clust_tidy %>%
+  mutate(rel_abund_log2 = if_else(rel_abund > 0, log2(rel_abund), 0)) %>%
+  replace(is.na(.), 0)
+```
+
+## Boxplot
+```{r}
+(bp_data_quality <- imp_metabind_clust_tidy_log2 %>%
+  ggplot(aes(x = sample_ID, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot(alpha = 0.6) +
+  scale_fill_manual(values = c("light grey", "tomato1", "gold")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "LC-MS (+) Feature Abundances by Sample",
+       subtitle = "Log2 transformed data",
+       y = "Relative abundance"))
+```
+
+Much better! QCs look like there may be some drift though. Let's do drift correction with the Notame package!
+
+# Notame drift correction
+
+## Data wrangling
+
+### Feature abund df 
+
+```{r}
+# filtered and imputed data after notame clustering, transposed
+features_testforQCcorr <- t(imp_clust) %>%
+  as.data.frame() %>%
+  row_to_names(row_number = "find_header")
+
+# log2 transform
+log2_features_testforQCcorr <- features_testforQCcorr %>%
+  mutate_all(as.numeric) %>%
+  log2()
+
+
+```
+
+
+```{r, eval=FALSE}
+# write csv to manually edit
+write.csv(log2_features_testforQCcorr,
+          "notame dfs/feaures_test.csv",
+          row.names = TRUE)
+```
+
+
+Import corrected df (edited so that mz_rt could rowname 1)
+```{r}
+features_forQCcorr <- read.csv("notame dfs/features_forQCcorr.csv",
+                                header = FALSE,
+                                row.names = 1)
+
+
+features_forQCcorr <- features_forQCcorr %>%
+  rownames_to_column(var = "mz_rt") %>%
+  row_to_names(row_number = 1)%>%
+  separate(col = mz_rt,
+           into = c("mz", "rt"),
+           sep = "_")
+
+
+
+```
+
+
+```{r, eval=FALSE}
+write.csv(features_forQCcorr,
+          "notame dfs/features_forQCcorr_pt2.csv",
+          row.names = TRUE)
+```
+
+
+### Pheno df
+
+```{r}
+# separate sampleID and injection order
+pheno_data <- imp_clust[1] %>%
+  separate(col = sample_ID,
+           into = c("sample_ID", "injection_order"),
+           sep = "_HILICPOS_")
+
+# change pre-run QC injection number to correct number
+pheno_data[48, "injection_order"] <- 9
+
+# make inj order column num
+pheno_data <- pheno_data %>%
+  mutate_at("injection_order", as.numeric)
+
+t_pheno_data <- as.data.frame(t(pheno_data))
+
+
+```
+
+Combine pheno and feature dfs manually in excel to create metaboset df.
+```{r, eval=FALSE}
+write.csv(t_pheno_data,
+          "notame dfs/pheno_df.csv",
+          row.names = TRUE)
+```
+
+
+## Import Metaboset
+
+```{r}
+#make sure when converting csv to xlsx that you save as a new file, don't just change the name of the file
+metaboset <- read_from_excel("notame dfs/metaboset.xlsx",
+                             split_by = c("column", "Ion mode"))
+
+```
+
+
+```{r}
+#construct Metaboset
+modes <- construct_metabosets(exprs = metaboset$exprs,
+                              pheno_data = metaboset$pheno_data,
+                              feature_data = metaboset$feature_data, group_col = "Class")
+
+#extract each mode into a single object
+mode <- modes$HILIC_pos
+```
+
+
+## Boxplots before correction
+
+```{r}
+# ordered by injection
+(qualityBPs_b4correction <- plot_sample_boxplots(mode, order_by = "Class", title = "HILIC (+) uncorrected feature abundance") +
+   scale_fill_manual(values = c("light gray", "deepskyblue2")))
+
+#ordered by class
+plot_sample_boxplots(mode, order_by = "Injection_order", title = " HILIC (+) ncorrected feature abundance") +
+   scale_fill_manual(values = c("light gray", "deepskyblue2"))
+```
+
+
+## Boxplots after QC drift correction
+
+drift corrected takes up to 2 minutes
+```{r}
+mode <- flag_detection(mode, qc_limit = 0.75, group_limit = 0.8)
+
+
+corrected <- correct_drift(mode, log_transform = FALSE)
+```
+
+
+### Did drift correction work?
+
+inspection also takes about 2 minutes to run; output is percent of the features that were drift corrected. The remaining "low-quality" percent represents features for which the DC did *not* improve the RSD and D-ratio of the original data.
+
+```{r}
+inspected <- inspect_dc(orig = mode, dc = corrected, check_quality = TRUE)
+```
+
+### Boxplots, corrected
+```{r}
+(qualityBPS_driftcorrection <- plot_sample_boxplots(corrected, order_by = "Class", title = "HILIC (+) drift-corrected feature abundance") +
+   scale_fill_manual(values = c("light gray", "deepskyblue2")))
+
+plot_sample_boxplots(corrected, order_by = "Injection_order", title = "HILIC (+) corrected feature abundance")
+```
+
+
+## Compare quality BPs
+```{r, fig.height=8}
+(qualityBPs_compared <- ggarrange(qualityBPs_b4correction, qualityBPS_driftcorrection,
+                    ncol = 2, nrow = 1))
+```
+
+## Export new Metaboset to Excel spreadsheet
+```{r eval = FALSE}
+write_to_excel(corrected, "notame dfs/metaboset_corrected.xlsx")
+```
+
+
+## Import edited Metaboset
+
+```{r}
+metabdata_corrected <- read.csv(file = "notame dfs/metaboset_corrected_editedforR.csv",
+                                check.names = FALSE)
+```
+
+
+## Wrangle new metab data
+
+### Combine mz & rt back together
+
+```{r}
+metabdata_corrected_MZ_RT <- metabdata_corrected %>%
+  mutate(mass = round(metabdata_corrected$mass, digits = 4), # Decrease number of decimals for m/z & rt
+         rt = round(metabdata_corrected$rt, digits = 3),
+         .before=1,
+         .keep="unused") %>%
+  unite(mz_rt, c(mass, rt), remove=TRUE) # Combine m/z & rt with _ in between
+
+```
+
+### Transpose new df
+
+```{r}
+metabdata_corrected_t <- as.data.frame(t(metabdata_corrected_MZ_RT)) %>%
+  row_to_names(row_number = "find_header") %>% # make MZ_RT column names
+  rownames_to_column(var = "subj_period") # change rownames to column 1
+  
+```
+
+### Bind new data with metadata
+
+I want the new drift corrected (DC) df to look just like "imp_metabind_clust_log2" df
+
+```{r}
+# go back to wide data
+imp_metabind_clust_log2 <- imp_metabind_clust_tidy_log2 %>%
+  dplyr::select(!rel_abund) %>%
+  pivot_wider(names_from = mz_rt,
+              values_from = rel_abund_log2)
+```
+
+
+```{r}
+# combine subject and period columns from imp_metabind_clust_log2 in order to mimic DC df
+subj_per_imp_metabind_clust_log2 <- imp_metabind_clust_log2 %>%
+  unite(subj_period, c(Subject, Period), remove = FALSE)
+
+# place new DC observations in
+DC_imp_metabind_clust_log2 <- right_join(subj_per_imp_metabind_clust_log2[,c(1:12)], metabdata_corrected_t)
+
+# put QC back to their sample names
+DC_imp_metabind_clust_log2[c(49:56),1] <- DC_imp_metabind_clust_log2[c(49:56),2]
+
+# remove subj period col
+DC_imp_metabind_clust_log2 <- DC_imp_metabind_clust_log2 %>%
+  dplyr::select(!"subj_period") %>%
+  mutate_at(-c(1:11), as.numeric)
+
+# replace NAs in columns for QCs
+DC_imp_metabind_clust_log2[is.na(DC_imp_metabind_clust_log2)] <- "QC"
+```
+
+```{r}
+# tidy df 
+DC_imp_metabind_clust_tidy_log2 <- DC_imp_metabind_clust_log2 %>%
+  pivot_longer(cols = 12:ncol(.),
+               names_to = "mz_rt",
+               values_to = "rel_abund_log2")
+
+```
+
+
+# Load Feature ID Key
+Here, I'm inserting a key that would indicate identified features above level 2 ID.
+
+```{r}
+key_omics <- read_xlsx("../annotated-features-table.xlsx",
+                 sheet = "Features") %>%
+  clean_names() %>%
+  filter(lc_mode_c18_hilic == "HILIC") %>% # LC mode
+  filter(esi_mode == "+") %>% # ESI mode
+  dplyr::select(mz_rt, id, metabolite_class, parent_compound) # select relevant columns
+
+# add key columns (left_join to only keep all observations present in full feature table)
+anno_imp_metabind_clust_tidy_log2 <- left_join(DC_imp_metabind_clust_tidy_log2, key_omics, by = "mz_rt") %>%
+  # replace NAs in feature ID columns to un-annotated feature id's (mz_rt)
+  mutate(Feature_ID = coalesce(id, mz_rt))
+```
+
+
+# PCAs
+
+## With QCS
+
+### Wrangle
+
+```{r}
+# go back to wide data
+anno_imp_metabind_clust_log2 <- anno_imp_metabind_clust_tidy_log2 %>%
+  dplyr::select(c(1:11),
+                Feature_ID, rel_abund_log2) %>%
+  pivot_wider(names_from = Feature_ID,
+              values_from = rel_abund_log2)
+```
+
+```{r}
+PCA.DC_imp_metabind_clust_log2 <- PCA(anno_imp_metabind_clust_log2,  # wide data
+                                   quali.sup = 1:11, # remove qualitative variables
+                                   graph = FALSE, # don't graph
+                                   scale.unit = FALSE) # don't scale, already transformed data
+
+# PCA summary
+kable(summary(PCA.DC_imp_metabind_clust_log2))
+```
+
+```{r}
+# pull PC coordinates into df
+PC_coord_QC_log2 <- as.data.frame(PCA.DC_imp_metabind_clust_log2$ind$coord)
+
+# bind back metadata from cols 1-10
+PC_coord_QC_log2 <- bind_cols(anno_imp_metabind_clust_log2[,1:11], PC_coord_QC_log2)
+
+# grab some variance explained
+importance_QC <- PCA.DC_imp_metabind_clust_log2$eig
+
+# set variance explained with PC1, round to 2 digits
+PC1_withQC <- round(importance_QC[1,2], 2)
+
+# set variance explained with PC2, round to 2 digits
+PC2_withQC <- round(importance_QC[2,2], 2)
+```
+
+### Plots
+Using FactoExtra package
+```{r}
+# scree plot
+fviz_eig(PCA.DC_imp_metabind_clust_log2)
+
+# get eigenvalues
+kable(get_eig(PCA.DC_imp_metabind_clust_log2))
+```
+
+```{r}
+# scores plot
+fviz_pca_ind(PCA.DC_imp_metabind_clust_log2)
+```
+
+### Manual scores plots
+```{r}
+# manual scores plot
+(PCA_withQCs <- PC_coord_QC_log2 %>%
+  ggplot(aes(x = Dim.1, y = Dim.2,
+             fill = factor(Intervention, levels = c("Yellow", "Red", "QC")))) +
+  geom_point(shape = 21, alpha = 0.8) +
+  scale_fill_manual(values = c("gold", "tomato1", "light grey")) +
+  scale_color_manual(values = "black") +  
+  theme_minimal() +
+  coord_fixed(PC2_withQC/PC1_withQC) +
+  labs(x = glue::glue("PC1: {PC1_withQC}%"),
+       y = glue::glue("PC2: {PC2_withQC}%"),
+       fill = "Group",
+       title = "Principal Components Analysis Scores Plot",
+       subtitle = "Log2 transformed data"))
+```
+
+## Without QCs
+
+### Wrangle 
+
+```{r}
+anno_imp_metabind_clust_log2_noQCs <- anno_imp_metabind_clust_log2 %>%
+  filter(Intervention != "QC")
+
+PCA.DC_imp_metabind_clust_log2_noQCs <- PCA(anno_imp_metabind_clust_log2_noQCs, # wide data
+                               quali.sup=1:11, # remove qualitative variables
+                               graph=FALSE, # don't graph
+                               scale.unit=FALSE) # don't scale, we already did this
+
+# look at summary
+kable(summary(PCA.DC_imp_metabind_clust_log2_noQCs))
+```
+
+```{r}
+# pull PC coordinates into df
+PC_coord_noQCs_log2 <- as.data.frame(PCA.DC_imp_metabind_clust_log2_noQCs$ind$coord)
+
+# bind back metadata from cols 1-10
+PC_coord_noQCs_log2 <- bind_cols(anno_imp_metabind_clust_log2_noQCs[,1:11], PC_coord_noQCs_log2)
+
+# grab some variance explained
+importance_noQC <- PCA.DC_imp_metabind_clust_log2_noQCs$eig
+
+# set variance explained with PC1, round to 2 digits
+PC1_noQC <- round(importance_noQC[1,2], 2)
+
+# set variance explained with PC2, round to 2 digits
+PC2_noQC <- round(importance_noQC[2,2], 2)
+```
+
+### Plots
+Using FactoExtra
+
+```{r}
+# scree plot
+fviz_eig(PCA.DC_imp_metabind_clust_log2_noQCs)
+```
+
+```{r}
+# scores plot
+fviz_pca_ind(PCA.DC_imp_metabind_clust_log2_noQCs)
+```
+
+
+```{r}
+# plot of contributions from features to PC1
+(var_contrib_noQCs_PC1 <- fviz_contrib(PCA.DC_imp_metabind_clust_log2_noQCs,
+             choice = "var",
+             axes = 1,
+             top = 25,
+             title = "Var contribution to PC1: no QCs"))
+
+# plot of contributions from features to PC2
+(var_contrib_noQCs_PC2 <- fviz_contrib(PCA.DC_imp_metabind_clust_log2_noQCs,
+             choice = "var",
+             axes = 2,
+             top = 25,
+             title = "Var contribution to PC2: no QCs"))
+```
+
+### Manual scores plots
+
+#### Yellow vs red
+```{r}
+(PCA_withoutQCs <- PC_coord_noQCs_log2 %>%
+  ggplot(aes(x = Dim.1, 
+             y = Dim.2,
+             fill = Intervention)) +
+    geom_point(shape = 21, alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha=0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha=0.5) +
+    scale_fill_manual(values = c("gold", "tomato1")) +
+    scale_color_manual(values = "black") +  
+    theme_minimal() +
+    coord_fixed(PC2_noQC/PC1_noQC) +
+    labs(x = glue::glue("PC1: {PC1_noQC}%"),
+         y = glue::glue("PC2: {PC2_noQC}%"),
+         fill = "Intervention",
+         title = "Principal Components Analysis Scores Plot",
+         subtitle = "Log2 transformed data, without QCs"))
+ggplotly(PCA_withoutQCs)
+```
+
+#### pre vs post
+```{r}
+(PCA_withoutQCs.pre_post <- PC_coord_noQCs_log2 %>%
+  ggplot(aes(x = Dim.1, 
+             y = Dim.2,
+             fill = factor(pre_post_intervention, levels = c("pre_Yellow",
+                                                             "post_Yellow",
+                                                             "pre_Red",
+                                                             "post_Red")),
+             text = sample_ID)) +
+    geom_point(shape = 21, alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha=0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha=0.5) +
+    scale_fill_manual(values = c("gray", "yellow1", "pink1", "red2")) +
+    scale_color_manual(values = "black") +  
+    theme_minimal() +
+    coord_fixed(PC2_noQC/PC1_noQC) +
+    labs(x = glue::glue("PC1: {PC1_noQC}%"),
+         y = glue::glue("PC2: {PC2_noQC}%"),
+         fill = "pre_post",
+         title = "Principal Components Analysis Scores Plot",
+         subtitle = "Log2 transformed, without QCs"))
+ggplotly(PCA_withoutQCs.pre_post,
+         tooltip = "text") 
+```
+
+
+
+## Removal of outliers
+
+### With QCs
+
+#### Wrangle
+
+
+```{r}
+# go back to wide data
+DC_imp_nooutliers_log2 <- anno_imp_metabind_clust_log2 %>%
+  filter(Subject != 6106,
+         Subject != 6112)
+
+PCA.DC_imp_nooutliers_log2 <- PCA(DC_imp_nooutliers_log2,  # wide data
+                                   quali.sup = 1:11, # remove qualitative variables
+                                   graph = FALSE, # don't graph
+                                   scale.unit = FALSE) # don't scale, already transformed data
+
+# PCA summary
+summary(PCA.DC_imp_nooutliers_log2)
+```
+
+```{r}
+# pull PC coordinates into df
+PC_nooutliers_QC_log2 <- as.data.frame(PCA.DC_imp_nooutliers_log2$ind$coord)
+
+# bind back metadata from cols 1-11
+PC_nooutliers_QC_log2 <- bind_cols(DC_imp_nooutliers_log2[,1:11], PC_nooutliers_QC_log2)
+
+# grab some variance explained
+importance_nooutliers_QC <- PCA.DC_imp_nooutliers_log2$eig
+
+# set variance explained with PC1, round to 2 digits
+PC1_nooutliers_withQC <- round(importance_nooutliers_QC[1,2], 2)
+
+# set variance explained with PC2, round to 2 digits
+PC2_nooutliers_withQC <- round(importance_nooutliers_QC[2,2], 2)
+```
+
+#### Plots
+Using FactoExtra package
+```{r}
+# scree plot
+fviz_eig(PCA.DC_imp_nooutliers_log2)
+```
+
+```{r}
+# scores plot
+fviz_pca_ind(PCA.DC_imp_nooutliers_log2)
+```
+
+
+#### Manual scores plots
+
+ ##### Red vs yellow
+```{r}
+# manual scores plot
+(PCA_nooutliers_withQCs <- PC_nooutliers_QC_log2 %>%
+  ggplot(aes(x = Dim.1, y = Dim.2,
+             fill = factor(Intervention, levels = c("Yellow", "Red", "QC")))) +
+  geom_point(shape = 21, alpha = 0.8) +
+  scale_fill_manual(values = c("gold", "tomato1", "light grey")) +
+  scale_color_manual(values = "black") +  
+  theme_minimal() +
+  labs(x = glue::glue("PC1: {PC1_nooutliers_withQC}%"),
+       y = glue::glue("PC2: {PC2_nooutliers_withQC}%"),
+       fill = "Group",
+       title = "Principal Components Analysis Scores Plot"))
+```
+
+##### Pre vs post
+```{r}
+(PCA_nooutliers_prepost_withQCs <- PC_nooutliers_QC_log2 %>%
+  ggplot(aes(x = Dim.1, 
+             y = Dim.2,
+             fill = factor(pre_post_intervention, levels = c("pre_Yellow",
+                                                             "post_Yellow",
+                                                             "pre_Red",
+                                                             "post_Red")),
+             text = sample_ID)) +
+    geom_point(shape = 21, alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha=0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha=0.5) +
+    scale_fill_manual(values = c("gray", "yellow1", "pink1", "red2")) +
+    scale_color_manual(values = "black") +  
+    theme_minimal() +
+    labs(x = glue::glue("PC1: {PC1_nooutliers_withQC}%"),
+         y = glue::glue("PC2: {PC2_nooutliers_withQC}%"),
+         fill = "pre_post",
+         title = "Principal Components Analysis Scores Plot"))
+ggplotly(PCA_nooutliers_prepost_withQCs,
+         tooltip = "text") 
+```
+
+
+### Without QCs
+
+#### Wrangle
+```{r}
+imp_nooutliers_noQCs_log2 <- DC_imp_nooutliers_log2 %>%
+  filter(Intervention != "QC") 
+
+PCA.imp_nooutliers_noQCs_log2 <- PCA(imp_nooutliers_noQCs_log2, # wide data
+                               quali.sup=1:11, # remove qualitative variables
+                               graph=FALSE, # don't graph
+                               scale.unit=FALSE) # don't scale, we already did this
+
+# look at summary
+kable(summary(PCA.imp_nooutliers_noQCs_log2))
+```
+
+```{r}
+# pull PC coordinates into df
+PC_coord_nooutliers_noQC_log2 <- as.data.frame(PCA.imp_nooutliers_noQCs_log2$ind$coord)
+
+# bind back metadata from cols 1-11
+PC_coord_nooutliers_noQC_log2 <- bind_cols(imp_nooutliers_noQCs_log2[,1:11], PC_coord_nooutliers_noQC_log2)
+
+# grab some variance explained
+importance_nooutliers_noQC <- PCA.imp_nooutliers_noQCs_log2$eig
+
+# set variance explained with PC1, round to 2 digits
+PC1_nooutliers_noQC <- round(importance_nooutliers_noQC[1,2], 2)
+
+# set variance explained with PC2, round to 2 digits
+PC2_nooutliers_noQC <- round(importance_nooutliers_noQC[2,2], 2)
+```
+
+
+#### Plots
+Using FactoExtra
+```{r}
+# scree plot
+fviz_eig(PCA.imp_nooutliers_noQCs_log2)
+```
+
+```{r}
+# scores plot
+fviz_pca_ind(PCA.imp_nooutliers_noQCs_log2)
+```
+
+
+```{r}
+# plot of contributions from features to PC1
+(var_contrib_nooutliers_noQCs_PC1 <- fviz_contrib(PCA.imp_nooutliers_noQCs_log2,
+             choice = "var",
+             axes = 1,
+             top = 20,
+             title = "Var contribution to PC1: no outliers, no QCs"))
+
+# plot of contributions from features to PC2
+(var_contrib_nooutliers_noQCs_PC2 <- fviz_contrib(PCA.imp_nooutliers_noQCs_log2,
+             choice = "var",
+             axes = 2,
+             top = 20,
+             title = "Var contribution to PC2: no outliers, no QCs"))
+```
+
+
+#### Manual scores plots
+
+##### Red vs yellow
+```{r}
+(PCA_nooutliers_withoutQCs <- PC_coord_nooutliers_noQC_log2 %>%
+  ggplot(aes(x = Dim.1, 
+             y = Dim.2,
+             fill = Intervention)) +
+    geom_point(shape = 21, alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha=0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha=0.5) +
+    scale_fill_manual(values = c("tomato1", "gold")) +
+    scale_color_manual(values = "black") +  
+    theme_minimal() +
+    coord_fixed(PC2_nooutliers_noQC/PC1_nooutliers_noQC) +
+    labs(x = glue::glue("PC1: {PC1_nooutliers_noQC}%"),
+         y = glue::glue("PC2: {PC2_nooutliers_noQC}%"),
+         fill = "Intervention",
+         title = "Principal Components Analysis Scores Plot"))
+ggplotly(PCA_nooutliers_withoutQCs)
+```
+
+
+##### Pre vs post
+```{r}
+(PCA_nooutliers_noQCs.prepost <- PC_coord_nooutliers_noQC_log2 %>%
+  ggplot(aes(x = Dim.1, 
+             y = Dim.2,
+             fill = factor(pre_post_intervention, levels = c("pre_Yellow",
+                                                             "post_Yellow",
+                                                             "pre_Red",
+                                                             "post_Red")),
+             text = sample_ID)) +
+    geom_point(shape = 21, alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha=0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha=0.5) +
+    scale_fill_manual(values = c("gray", "yellow1", "pink1", "red2")) +
+    scale_color_manual(values = "black") +  
+    theme_minimal() +
+    coord_fixed(PC2_nooutliers_noQC/PC1_nooutliers_noQC) +
+    labs(x = glue::glue("PC1: {PC1_nooutliers_noQC}%"),
+         y = glue::glue("PC2: {PC2_nooutliers_noQC}%"),
+         fill = "pre_post",
+         title = "Principal Components Analysis Scores Plot",
+         subtitle = "Log2 transformed data, no outliers"))
+ggplotly(PCA_nooutliers_noQCs.prepost,
+         tooltip = "text") 
+```
+
+
+##### M v F
+```{r}
+(PCA_nooutliers_noQCs.MvsF <- PC_coord_nooutliers_noQC_log2 %>%
+  ggplot(aes(x = Dim.1, 
+             y = Dim.2,
+             fill = factor(Sex, levels = c("M","F")),
+             text = sample_ID)) +
+    geom_point(shape = 21, alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha=0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha=0.5) +
+    scale_fill_manual(values = c("green", "pink")) +
+    scale_color_manual(values = "black") +  
+    theme_minimal() +
+    coord_fixed(PC2_nooutliers_noQC/PC1_nooutliers_noQC) +
+    labs(x = glue::glue("PC1: {PC1_nooutliers_noQC}%"),
+         y = glue::glue("PC2: {PC2_nooutliers_noQC}%"),
+         fill = "pre_post",
+         title = "Principal Components Analysis Scores Plot",
+         subtitle = "Log2 transformed data, no 6106"))
+ggplotly(PCA_nooutliers_noQCs.MvsF,
+         tooltip = "text")
+```
+
+
+
+# PCAtools pckg
+
+## W/ Outliers
+
+### Data wrangling
+```{r}
+# create rel abund df suitable for PCAtools package
+imp_clust_omicsdata_outliers_forPCAtools <- as.data.frame(t(anno_imp_metabind_clust_log2[,-c(2:11)])) # transpose df (using df with key)
+
+names(imp_clust_omicsdata_outliers_forPCAtools) <- imp_clust_omicsdata_outliers_forPCAtools[1,] # make sample IDs column names
+
+imp_clust_omicsdata_outliers_forPCAtools <- imp_clust_omicsdata_outliers_forPCAtools[-1,] # remove sample ID row
+
+# create metadata df suitable for PCAtools pckg
+metadata_outliers_forPCAtools <- metadata %>%
+  column_to_rownames(var = "sample_ID") # change sample ID column to rownames
+
+# create a vector so that col names in abundance df matches metadata df
+order_outliers_forPCAtools <- match(rownames(metadata_outliers_forPCAtools), colnames(imp_clust_omicsdata_outliers_forPCAtools))
+
+# reorder col names in abundance df so that it matches metadata
+abundata_outliers_reordered_forPCAtools <- imp_clust_omicsdata_outliers_forPCAtools[ ,order_outliers_forPCAtools] 
+
+# change abundance df to numeric and change name to for consistency! (using df that is already log2 transformed as of 8/26/24)
+log2_abundata_outliers_reordered_forPCAtools <-
+  abundata_outliers_reordered_forPCAtools %>%
+  mutate_all(as.numeric)
+
+
+# unite pre_post column with intervention column to create pre_intervention column
+metadata_outliers_forPCAtools <- metadata_outliers_forPCAtools %>%
+  unite(col = "pre_post_intervention",
+        c("pre_post","Intervention"),
+        sep = "_",
+        remove = FALSE)
+```
+
+### PCA
+```{r, fig.width=7, fig.height=7.5}
+# pca
+p_outliers <- PCAtools::pca(log2_abundata_outliers_reordered_forPCAtools, 
+         metadata = metadata_outliers_forPCAtools, 
+         scale = FALSE # using scaled data already (log2 transformed)
+         
+)
+```
+
+
+### More PCAs
+
+#### Pre vs post both
+
+##### PC1vPC2
+
+
+```{r, fig.width=8.5, fig.height=6.5}
+(PCAtools_outliers <- biplot(p_outliers,
+                               lab = paste0(metadata_outliers_forPCAtools$Subject),
+                           colby = 'pre_post_intervention',
+                           colkey = c("pre_Yellow" = "lemonchiffon1",
+                                        "post_Yellow" = "yellow2",
+                                        "pre_Red" = "rosybrown2",
+                                        "post_Red" = "darkred"),
+                           hline = 0, vline = 0,
+                           legendPosition = 'right',
+                           title = "PCA Scores Plot with Loadings",
+                           subtitle = "Log2 transformed data, HILIC (+), without QCs but with outliers /n99% Confidence Ellipses",
+                           ellipse = TRUE,
+                           ellipseType = 't', # assumes multivariate
+                           ellipseLevel = 0.99,
+                           ellipseFill = TRUE,
+                           ellipseAlpha = 0.2,
+                           ellipseLineSize = 0.5,
+                           xlim = c(-5, 10),
+                           ylim = c(-5, 10),
+                           showLoadings = FALSE))
+```
+
+6106 and 6112 are outside of the 99% confidence interval, we will classify them as true outliers moving forward.
+
+## No outliers
+
+### Data wrangling
+```{r}
+# create rel abund df suitable for PCAtools package
+
+imp_clust_omicsdata_forPCAtools <- as.data.frame(t(anno_imp_metabind_clust_log2[,-c(2:11)])) # transpose df 
+
+names(imp_clust_omicsdata_forPCAtools) <- imp_clust_omicsdata_forPCAtools[1,] # make sample IDs column names
+
+imp_clust_omicsdata_forPCAtools <- imp_clust_omicsdata_forPCAtools[-1,] # remove sample ID row
+
+imp_clust_omicsdata_forPCAtools <- imp_clust_omicsdata_forPCAtools %>%
+  dplyr::select(!contains("QC")) # remove QC observations
+
+
+# create metadata df suitable for PCAtools pckg
+metadata_forPCAtools <- metadata %>%
+  column_to_rownames(var = "sample_ID") # change sample ID column to rownames
+
+# create a vector so that col names in abundance df matches metadata df
+order_forPCAtools <- match(rownames(metadata_forPCAtools), colnames(imp_clust_omicsdata_forPCAtools))
+
+# reorder col names in abundance df so that it matches metadata
+abundata_reordered_forPCAtools <- imp_clust_omicsdata_forPCAtools[ ,order_forPCAtools] 
+
+# change abundance df to numeric
+log2_abundata_reordered_forPCAtools <- abundata_reordered_forPCAtools %>%
+  mutate_at(1:ncol(.), as.numeric)
+
+# fix rownames to have keys again
+rownames(log2_abundata_reordered_forPCAtools) <- rownames(abundata_reordered_forPCAtools)
+
+# remove outlier subj from both df
+log2_abundata_forPCAtools <- log2_abundata_reordered_forPCAtools %>%
+  dplyr::select(!contains("6106")) %>%
+  dplyr::select(!contains("6112"))
+
+metadata_forPCAtools <- metadata_forPCAtools %>%
+  filter(Subject != 6106,
+         Subject != 6112)
+
+# unite pre_post column with intervention column to create pre_intervention column
+metadata_forPCAtools <- metadata_forPCAtools %>%
+  unite(col = "pre_post_intervention",
+        c("pre_post","Intervention"),
+        sep = "_",
+        remove = FALSE)
+
+```
+
+
+### Screeplot analysis
+
+Horn's parallel analysis
+```{r, warning=FALSE}
+horn <- parallelPCA(log2_abundata_forPCAtools)
+
+horn$n
+```
+
+```{r, fig.width=7, fig.height=7.5}
+# pca
+p <- PCAtools::pca(log2_abundata_forPCAtools, 
+         metadata = metadata_forPCAtools, 
+         scale = FALSE # using scaled data already (log2 transformed)
+         
+)
+```
+
+Elbow method
+```{r}
+elbow <- findElbowPoint(p$variance)
+
+elbow
+```
+
+
+```{r}
+  screeplot(p,
+    components = getComponents(p, 1:20),
+    vline = c(horn$n, elbow)) +
+  geom_label(aes(x = horn$n + 1, y = 50,
+      label = 'Horn\'s', vjust = -1, size = 8)) +
+    geom_label(aes(x = elbow + 1, y = 50,
+      label = 'Elbow method', vjust = -3, size = 8))
+```
+
+How many PCs do we need to capture at least 80% variance?
+```{r}
+which(cumsum(p$variance) > 80)[1]
+```
+
+### More PCAs
+
+#### Pre vs post both
+
+##### PC1vPC2
+
+
+```{r,  fig.width=8}
+biplot(p,
+       lab = paste0(metadata_forPCAtools$Subject),
+          colby = 'pre_post_intervention',
+          colkey = c("pre_Yellow" = "lemonchiffon1",
+                                        "post_Yellow" = "yellow2",
+                                        "pre_Red" = "rosybrown2",
+                                        "post_Red" = "darkred"),
+         colLegendTitle = "Intervention Timepoint",
+         # ellipse config
+         ellipse = TRUE,
+         ellipseType = 't',
+         ellipseLevel = 0.99,
+         ellipseFill = TRUE,
+         ellipseAlpha = 0.2,
+         ellipseLineSize = 1.0,
+         xlim = c(-10,10), ylim = c(-10, 10),
+         hline = 0, vline = 0,
+       legendPosition = 'right',
+       title = "PCA Scores Plot",
+       subtitle = "Log2 transformed data, HILIC (+), outliers 6106 and 6112 removed, no QCs \n99% confidence level ellipses")
+
+```
+
+
+```{r, fig.width=8.5, fig.height=6.5}
+(PCA.colby.prevspost <- biplot(p,
+                               lab = NULL,
+                           colby = 'pre_post_intervention',
+                           colkey = c("pre_Yellow" = "lemonchiffon1",
+                                        "post_Yellow" = "yellow2",
+                                        "pre_Red" = "rosybrown2",
+                                        "post_Red" = "darkred"),
+                           hline = 0, vline = 0,
+         legendPosition = 'right',
+         title = "PCA Scores Plot",
+         subtitle = "Log2 transformed data, HILIC (+), outliers 6106 and 6112 removed, no QCs",
+         showLoadings = F) )
+
+```
+
+```{r, fig.width=8.5, fig.height=6.5}
+biplot(p,
+                               lab = NULL,
+                           colby = 'pre_post_intervention',
+                           colkey = c("pre_Yellow" = "lemonchiffon1",
+                                        "post_Yellow" = "yellow2",
+                                        "pre_Red" = "rosybrown2",
+                                        "post_Red" = "darkred"),
+                           hline = 0, vline = 0,
+         legendPosition = 'right',
+         title = "PCA Scores Plot",
+         subtitle = "Log2 transformed data, HILIC (+), outliers 6106 and 6112 removed, no QCs",
+         showLoadings = T)
+
+```
+
+##### Pairs plot
+```{r, fig.width=10, fig.height=10, message=FALSE}
+(PCA_pairsplot.colby.prevspost <-
+  pairsplot(p,
+    components = getComponents(p, c(1:10)),
+    triangle = TRUE, trianglelabSize = 12,
+    hline = 0, vline = 0,
+    pointSize = 0.4,
+    gridlines.major = FALSE, gridlines.minor = FALSE,
+    colby = 'pre_post_intervention', 
+    colkey = c("pre_Yellow" = "lemonchiffon1",
+                                        "post_Yellow" = "yellow2",
+                                        "pre_Red" = "rosybrown2",
+                                        "post_Red" = "darkred"),
+    title = 'Pairs plot', plotaxes = FALSE,
+    margingaps = unit(c(-0.01, -0.01, -0.01, -0.01), 'cm')))
+
+```
+
+### Sex
+
+#### PC1vPC2
+```{r, fig.width=8}
+(PCA.colby.Sex <- biplot(p,
+                           lab = paste0(metadata_forPCAtools$Subject),
+                          colby = 'Sex',
+                          colkey = c("M" = "red",
+                                     "F" = "purple"),
+                          hline = 0, vline = 0,
+                          legendPosition = 'right' +
+                            geom_point(aes(text = metadata_forPCAtools$Subject))))
+
+ggplotly(PCA.colby.Sex,
+         tooltip = "text") 
+
+```
+
+#### Pairsplot
+```{r, fig.width=10, fig.height=10, message=FALSE}
+  pairsplot(p,
+    components = getComponents(p, c(1:10)),
+    triangle = TRUE, trianglelabSize = 12,
+    hline = 0, vline = 0,
+    pointSize = 0.4,
+    gridlines.major = FALSE, gridlines.minor = FALSE,
+    colby = 'Sex', 
+    colkey = c("M" = "red",
+               "F" = "purple"),
+    title = 'Pairs plot', plotaxes = FALSE,
+    margingaps = unit(c(-0.01, -0.01, -0.01, -0.01), 'cm'))
+```
+
+
+### Pre vs post tomato
+
+#### PC1vPC2
+```{r, fig.width=8, fig.height=6.5, message=FALSE}
+(PCA.colby.overall.prevspost <- biplot(p,
+                                       lab = paste0(metadata_forPCAtools$Subject),
+                                       colby = 'pre_post',
+                                       colkey = c("pre" = "gray",
+                                                  "post" = "darkgreen"),
+                                       hline = 0, vline = 0,
+                                       legendPosition = 'right' +
+                                         geom_point(aes(text = metadata_forPCAtools$Subject))))
+
+ggplotly(PCA.colby.overall.prevspost,
+         tooltip = "text") 
+
+```
+
+#### Pairsplot
+
+```{r, fig.width=10, fig.height=10, message=FALSE}
+  pairsplot(p,
+    components = getComponents(p, c(1:10)),
+    triangle = TRUE, trianglelabSize = 12,
+    hline = 0, vline = 0,
+    pointSize = 0.4,
+    gridlines.major = FALSE, gridlines.minor = FALSE,
+    colby = 'pre_post', 
+    colkey = c("pre" = "gray",
+               "post" = "darkgreen"),
+    title = 'Pairs plot', plotaxes = FALSE,
+    margingaps = unit(c(-0.01, -0.01, -0.01, -0.01), 'cm'))
+```
+
+
+### Period
+
+Here is a good check for any period effects
+
+#### PC1vPC2
+```{r, fig.width=8, fig.height=6.5, message=FALSE}
+(PCA.colby.period <- biplot(p,
+                            lab = paste0(metadata_forPCAtools$Subject),
+                            colby = 'Period',
+                            hline = 0, vline = 0,
+                            legendPosition = 'right' +
+                              geom_point(aes(text = metadata_forPCAtools$Subject))))
+
+ggplotly(PCA.colby.period,
+         tooltip = "text") 
+
+```
+
+#### Pairsplot
+```{r, fig.width=10, fig.height=10, message=FALSE}
+  pairsplot(p,
+    components = getComponents(p, c(1:10)),
+    triangle = TRUE, trianglelabSize = 12,
+    hline = 0, vline = 0,
+    pointSize = 0.4,
+    gridlines.major = FALSE, gridlines.minor = FALSE,
+    colby = 'Period',
+    title = 'Pairs plot', plotaxes = FALSE,
+    margingaps = unit(c(-0.01, -0.01, -0.01, -0.01), 'cm'))
+```
+
+
+
+### Sequence
+
+Also looking for sequence effects
+
+#### PC1vPC2
+```{r, fig.width=8, fig.height=6.5, message=FALSE}
+(PCA.colby.sequence <- biplot(p,
+                            lab = paste0(metadata_forPCAtools$Subject),
+                            colby = 'sequence',
+                            hline = 0, vline = 0,
+                            legendPosition = 'right' +
+                              geom_point(aes(text = metadata_forPCAtools$Subject))))
+
+ggplotly(PCA.colby.sequence,
+         tooltip = "text") 
+
+```
+
+#### Pairsplot
+```{r, fig.width=10, fig.height=10, message=FALSE}
+  pairsplot(p,
+    components = getComponents(p, c(1:10)),
+    triangle = TRUE, trianglelabSize = 12,
+    hline = 0, vline = 0,
+    pointSize = 0.4,
+    gridlines.major = FALSE, gridlines.minor = FALSE,
+    colby = 'sequence',
+    title = 'Pairs plot', plotaxes = FALSE,
+    margingaps = unit(c(-0.01, -0.01, -0.01, -0.01), 'cm'))
+```
+
+## Eigen corplots
+This is a cool way to explore the correlations between the metadata and the PCs! I want to look at how the metavariables correlate with PCs that account for 80% variation in the dataset. 
+
+Again: How many PCs do we need to capture at least 80% variance?
+```{r}
+which(cumsum(p$variance) > 80)[1]
+```
+
+```{r, fig.width=12, fig.height=7.5, message=FALSE}
+
+  eigencorplot(p,
+    components = getComponents(p, 1:16), # get components that account for 80% variance
+    metavars = colnames(metadata_forPCAtools),
+    col = c('darkblue', 'blue2', 'gray', 'red2', 'darkred'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'PC1-14 metadata correlations',
+    colFrame = 'white',
+    plotRsquared = FALSE)
+
+
+```
+
+
+```{r, fig.width=15, fig.height=7.5, message=FALSE}
+  eigencorplot(p,
+    components = getComponents(p, 1:16),
+    metavars = colnames(metadata_forPCAtools),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    posLab = 'all',
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal ~ component ~ Pearson ~ r^2 ~ metadata ~ correlates),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+```
+
+
+I am most interested in PCs affected by pre_post_intervention, so I think it would be good to investigate the metabolites that contribute the most to these PCs.
+
+## Loadings plots
+
+### PC7/PC8
+```{r, fig.width=10, fig.height=10}
+# loadings plot for PCs 7 and 8
+  plotloadings(p,
+    components = getComponents(p, c(7,8)),
+    rangeRetain = 0.1, absolute = TRUE,
+    col = c('black', 'pink', 'red4'),
+    drawConnectors = TRUE, labSize = 3,
+    title = "Loadings plot",
+    subtitle = "PC 7 and PC 8",
+    caption = "Pre_post_intervention is highly correlated with these PCs")
+```
+
+#### Scores biplot
+```{r, fig.width=8, fig.height=6}
+biplot(p,
+       lab = NULL,
+       x = "PC7",
+       y = "PC8",
+       colby = 'pre_post_intervention',
+       colkey = c("pre_Yellow" = "lemonchiffon1",
+                  "post_Yellow" = "yellow2",
+                  "pre_Red" = "rosybrown2",
+                  "post_Red" = "darkred"),
+       colLegendTitle = "Intervention Timepoint",
+       hline = 0, vline = 0,
+       legendPosition = 'right',
+       title = "PCA Scores Plot",
+       subtitle = "Log2 transformed data, HILIC (+), outliers removed, no QCs \n95% confidence level ellipses",
+       showLoadings = TRUE)
+```
+
+
+# Multilevel PCA
+
+Without outliers
+
+```{r}
+
+Data_forMPCA <- imp_nooutliers_noQCs_log2 %>%
+  mutate_at("Subject", as.factor)
+
+summary(as.factor(Data_forMPCA$Subject))
+
+# make a vector for meta variables
+(metavar <- Data_forMPCA[,c(1:11)] %>%
+    colnames())
+```
+
+
+
+## Regular PCA
+
+
+```{r}
+mixOmicsPCA.result <- mixOmics::pca(Data_forMPCA[,!names(Data_forMPCA) %in% metavar],
+                            scale = FALSE,
+                            center = T)
+
+plotIndiv(mixOmicsPCA.result, 
+          ind.names = Data_forMPCA$Subject, 
+          group = Data_forMPCA$pre_post_intervention, 
+          col.per.group = c("post_Red" = "darkred",
+                            "post_Yellow" = "yellow3",
+                            "pre_Red" = "rosybrown",
+                            "post_Yellow" = "lemonchiffon2"),
+          legend.title  = "Intervention Timepoint",
+          legend = TRUE, 
+          title = 'Regular PCA, HILIC (+), Log2 transformed')
+
+```
+
+
+## Multilevel PCA
+
+
+
+### pre_post_intervention
+```{r}
+multilevelPCA.result <- mixOmics::pca(Data_forMPCA[,-(c(1:11))], 
+                            multilevel = Data_forMPCA$Subject,
+                            scale = FALSE,
+                            center = TRUE)
+
+```
+
+```{r}
+plotIndiv(multilevelPCA.result, 
+          ind.names = Data_forMPCA$Subject, 
+          group = Data_forMPCA$pre_post_intervention, 
+          col.per.group = c("post_Red" = "darkred",
+                            "post_Yellow" = "yellow3",
+                            "pre_Red" = "rosybrown",
+                            "post_Yellow" = "lemonchiffon2"),
+          legend = TRUE, 
+          legend.title = "Intervention Timepoint", 
+          title = 'Multilevel PCA, HILIC (+), Log2 transformed')
+```
+
+
+#### Loadings 
+```{r, fig.width=10}
+(loadings_multilevelPC1 <- plotLoadings(multilevelPCA.result, comp = 1, 
+                                    ndisplay = 15, 
+                                    title = "Top 15 features on Multilevel PC1, HILIC (+)"))
+```
+
+```{r, fig.width=10}
+(loadings_multilevelPC2 <- plotLoadings(multilevelPCA.result, comp = 2, 
+                                    ndisplay = 10, 
+                                    title = "Top 10 features on Multilevel PC2, HILIC (+)"))
+
+```
+
+#### Beautify
+
+```{r}
+multilevelPCA_scores <- multilevelPCA.result$variates$X %>% # retrieve scores
+  as.data.frame() %>%
+  mutate(sample_ID = Data_forMPCA$sample_ID)
+
+# join with metadata
+multilevelPCA_points <- left_join(multilevelPCA_scores, Data_forMPCA[,1:11]) 
+```
+##### Scores
+```{r}
+# visualize!
+(plot_multilevelPCA_manual <- multilevelPCA_points %>% 
+  ggplot(aes(x = PC1, y = PC2, 
+             fill = factor(pre_post_intervention, levels = c("pre_Yellow",
+                                                             "post_Yellow",
+                                                             "pre_Red",
+                                                             "post_Red")),
+             text = sample_ID)) +
+    geom_point(shape = 21, alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha=0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha=0.5) +
+    scale_fill_manual(values = c("lemonchiffon1",
+                                 "yellow2",
+                                 "rosybrown2",
+                                 "darkred")) +
+    scale_color_manual(values = "black") +  
+    theme_minimal() +
+    labs(x = "PC1, 12% variation",
+         y = "PC2, 9% variation",
+         fill = "Timepoint",
+         title = "Multilevel Principal Components Analysis Scores Plot",
+         subtitle = "Log2 transformed data, HILIC (+) without outlier subjects"))
+
+ggplotly(plot_multilevelPCA_manual,
+         tooltip = "text")
+```
+
+##### Biplot
+
+```{r}
+# retrieve loadings
+multilevelPCA_loadings <- multilevelPCA.result$loadings$X %>%
+  as.data.frame() %>%
+  rownames_to_column("mz_rt")
+```
+
+```{r}
+multilevelPCA_loadings %>%
+  filter(PC1 %in% loadings_multilevelPC1$importance
+         | PC2 %in% loadings_multilevelPC2$importance) %>%
+  ggplot(aes(x = PC1, y = PC2, label = mz_rt)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_label_repel(size = 2.5) +
+  scale_fill_brewer() +
+  theme_minimal() +
+  labs( x = "PC1, 12% variation",
+         y = "PC2, 9% variation",
+       title = "Loadings Plot for Multilevel PCA",
+       subtitle = "HILIC (+) \nSubj 6112 at post Tomato-Soy timepoint removed",)
+```
+
+
+```{r}
+# fx to normalize scores so that scores and loadings are on the same scale
+normalize <- function(x) return((x - min(x))/(max(x) - min(x)))
+```
+
+```{r}
+# normalize scores
+multilevelPCA_scores_normalized <- multilevelPCA_scores %>%
+  mutate(PC1_norm = scale(normalize(PC1), center = TRUE, scale = FALSE)) %>%
+  mutate(PC2_norm = scale(normalize(PC2), center = TRUE, scale = FALSE)) %>%
+  select(sample_ID, PC1_norm, PC2_norm, everything()) # reorder 
+```
+
+How did it go? PC1_norm and PC2_norm should all now be between -1 and 1
+```{r}
+head(multilevelPCA_scores_normalized) # looks good
+```
+
+
+Now we can plot together the scores and loadings in one plot.
+```{r}
+# join with metadata
+multilevelPCA_points_norm <- left_join(multilevelPCA_scores_normalized, Data_forMPCA[,1:11]) 
+```
+
+```{r multilevel biplot arrows}
+multilevelPCA_points_norm %>%
+  ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(aes(x = PC1_norm, y = PC2_norm, 
+                 fill = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red"))),
+             inherit.aes = F,
+             shape = 21) +
+  geom_segment(data = multilevelPCA_loadings %>%
+                 filter(PC1 %in% loadings_multilevelPC1$importance
+                        | PC2 %in% loadings_multilevelPC2$importance), 
+               aes(x = 0, y = 0, 
+                   xend = (PC1*4), yend = (PC2*4)), 
+               arrow = arrow(length = unit(1/2, "picas")),
+                                color = "black", alpha=0.55) +
+  geom_label_repel(data = multilevelPCA_loadings %>%
+                    filter(PC1 %in% loadings_multilevelPC1$importance
+                        | PC2 %in% loadings_multilevelPC2$importance),
+                   aes(x = PC1*5, y = PC2*6, label = mz_rt), 
+                   size = 2.5, segment.color = "transparent",
+                   direction = "both", max.overlaps = 15) +
+  scale_fill_manual(values = c("lemonchiffon1",
+                                 "yellow2",
+                                 "rosybrown2",
+                                 "darkred")) +
+  theme_minimal() +
+  labs(x = "PC1, 12% variation",
+         y = "PC2, 9% variation",
+       title = "Biplot for Multilevel PCA",
+       subtitle = "HILIC (+) \nSubjects 6106 and 6112 removed",
+       fill = "Timepoint",
+       caption = "")
+```
+
+
+```{r multilevel biplot no arrows}
+multilevelPCA_points_norm %>%
+  ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(aes(x = PC1_norm, y = PC2_norm, 
+                 fill = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red"))),
+             inherit.aes = F,
+             shape = 21) +
+  geom_label_repel(data = multilevelPCA_loadings %>%
+                    filter(PC1 %in% loadings_multilevelPC1$importance
+                        | PC2 %in% loadings_multilevelPC2$importance),
+                   aes(x = PC1*5, y = PC2*6, label = mz_rt), 
+                   size = 2.5, segment.color = "transparent",
+                   direction = "both", max.overlaps = 15) +
+  scale_fill_manual(values = c("lemonchiffon1",
+                                 "yellow2",
+                                 "rosybrown2",
+                                 "darkred"),
+                    labels = c("pre control",
+                               "post control",
+                               "pre tomato-soy",
+                               "post tomato-soy")) +
+  theme_minimal() +
+  labs(x = "PC1, 12% variation",
+         y = "PC2, 9% variation",
+       title = "Biplot for Multilevel PCA",
+       subtitle = "HILIC (+) \nSubjects 6106 and 6112 removed",
+       caption = "",
+       fill = "Timepoint")
+```
+
+### pre_post
+```{r}
+multilevelPCA.result <- mixOmics::pca(Data_forMPCA[,-(c(1:11))], 
+                            multilevel = Data_forMPCA$Subject,
+                            scale = FALSE,
+                            center = FALSE)
+
+plotIndiv(multilevelPCA.result, 
+          ind.names = Data_forMPCA$Subject, 
+          group = Data_forMPCA$pre_post, 
+          legend = TRUE, 
+          legend.title = "Treatment", 
+          title = 'Multilevel PCA, HILIC (+), Log2 transformed')
+
+```
+
+#### Loadings 
+```{r}
+plotLoadings(multilevelPCA.result, ndisplay = 15, comp = 2)
+
+```
+
+
+# Univariate analysis
+
+## Wrangle data
+
+use tidy data
+```{r}
+# use tidy data 
+head(anno_imp_metabind_clust_tidy_log2)
+```
+
+```{r}
+
+# remove QCs
+df_for_stats <- anno_imp_metabind_clust_tidy_log2 %>%
+  filter(Intervention != "QC")
+
+# check if QCs were removed
+unique(df_for_stats$Intervention)
+```
+
+```{r}
+# df without outliers
+df_for_stats_noOutlier <- df_for_stats %>%
+  filter(Subject != "6106",
+         Subject != "6112")
+
+# check if outlier was removed
+unique(df_for_stats_noOutlier$Subject)
+```
+
+
+```{r}
+# turn off sci notation outputs
+options(scipen = 999)
+```
+
+
+## Parametric tests
+
+### ANOVA (repeated measures) across timepoints
+
+```{r}
+
+anova_outpout_df <- df_for_stats_noOutlier %>%
+  dplyr::select(Subject, pre_post_intervention, Feature_ID, rel_abund_log2) %>%
+  group_by(Feature_ID) %>%
+  anova_test(rel_abund_log2 ~ pre_post_intervention, wid = Subject,
+             detailed = TRUE) %>%
+  adjust_pvalue(method = "BH") %>%
+  as.data.frame()
+
+anova_sig <- anova_outpout_df %>%
+  filter(p.adj <= 0.05)
+
+# how many significant features?
+nrow(anova_sig)
+  
+```
+
+
+```{r}
+# tukey's posthoc
+tukey_anova <- df_for_stats_noOutlier %>% 
+  dplyr::select(Subject, pre_post_intervention, Feature_ID, rel_abund_log2) %>%
+  group_by(Feature_ID) %>%
+  tukey_hsd(rel_abund_log2 ~ pre_post_intervention, wid = subject)
+```
+
+#### boxplots
+```{r, fig.height=10, fig.width=15}
+df_for_stats_noOutlier %>% 
+  filter(Feature_ID %in% anova_sig$Feature_ID) %>%
+  ggplot(aes(x = factor(pre_post_intervention,
+                        levels = c("pre_Yellow", "post_Yellow", 
+                                   "pre_Red", "post_Red")), 
+             y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  geom_line(aes(group = Subject), linewidth = 0.2) +
+  facet_wrap(vars(Feature_ID), scales = "free_y") + 
+  theme_clean()
+```
+
+
+#### Heatmap of features significant by ANOVA
+```{r, fig.width=8, fig.asp=1}
+ANOVA_heatmap_data <- anno_imp_metabind_clust_log2_noQCs %>%
+  filter(Subject != "6106",
+         Subject != "6112") %>%
+  unite("Subject_pre_post_intervention", Subject, pre_post_intervention, sep = "_", remove = FALSE) %>%
+  dplyr::select(sample_ID, Subject, Subject_pre_post_intervention, pre_post_intervention, all_of(anova_sig$Feature_ID)) %>%
+  column_to_rownames("sample_ID")
+
+ANOVA_heatmap <- 
+  pheatmap(t(ANOVA_heatmap_data[,-c(1:3)]),
+           scale = "row",
+           cluster_rows = TRUE,
+           clustering_distance_rows = "euclidean",
+           clustering_distance_cols = "euclidean",
+           clustering_method = "ward.D2",
+           labels_col = ANOVA_heatmap_data$Subject_pre_post_intervention,
+           color = colorRampPalette(c("#67a9cf", "#f7f7f7", "#ef8a62"))(16),
+           main = "Heatmap of features significant across timepoints \nby repeated measures one-way ANOVA \nBenjamoni-Hochberg corrected p-values > 0.05 \nHILIC (+)")
+  
+```
+
+
+
+```{r}
+ANOVA_heatmap_data2 <- anno_imp_metabind_clust_log2_noQCs %>%
+  filter(Subject != "6106",
+         Subject != "6112") %>%
+  unite("Subject_pre_post_intervention", Subject, pre_post_intervention, sep = "_", remove = FALSE) %>%
+  dplyr::select(sample_ID, Subject_pre_post_intervention, pre_post_intervention, all_of(anova_sig$Feature_ID)) %>%
+  column_to_rownames("sample_ID") 
+```
+
+
+```{r}
+# i need wide df
+df_for_stats_noOutlier_wide <- df_for_stats_noOutlier %>%
+  select(1:11, 13, 17) %>%
+  pivot_wider(names_from = "Feature_ID",
+              values_from = "rel_abund_log2")
+
+# change pre_post_intervention to factor
+df_for_stats_noOutlier_wide$pre_post_intervention <- as.factor(df_for_stats_noOutlier_wide$pre_post_intervention)
+
+# create annotation rows for treatment and wrangle
+# select sample col from heatmap metadata (also ensures the order is correct)
+anno_trt_row <- as.data.frame(rownames(ANOVA_heatmap_data2))
+
+# pull desired columns
+anno_trt_row$pre_post_intervention <- ANOVA_heatmap_data2$pre_post_intervention
+
+# select trt
+anno_trt_row <- anno_trt_row %>%
+  dplyr::select(pre_post_intervention) 
+
+# get rownames to match heatmap
+rownames(anno_trt_row) <- rownames(ANOVA_heatmap_data2)
+
+# create annotation colors
+annotation_colors <- list(pre_post_intervention = c("pre_Yellow" = "lemonchiffon1",
+                                                    "post_Yellow" = "yellow2",
+                                                    "pre_Red" = "rosybrown2",
+                                                    "post_Red" = "darkred"))
+```
+
+```{r, fig.height=8}
+ANOVA_heatmap <- 
+  pheatmap(t(ANOVA_heatmap_data2[,-c(1:2)]),
+           scale = "row",
+           cluster_rows = TRUE,
+           clustering_distance_rows = "euclidean",
+           clustering_distance_cols = "euclidean",
+           clustering_method = "ward.D2",
+           labels_col = ANOVA_heatmap_data2$Subject_pre_post_intervention,
+           color = colorRampPalette(c("#67a9cf", "#f7f7f7", "#ef8a62"))(16),
+           annotation_col = anno_trt_row,
+           annotation_colors = annotation_colors,
+           annotation_names_col = F,
+           main = "Heatmap of features significant across timepoints \nby repeated measures one-way ANOVA \nBenjamoni-Hochberg corrected p-values > 0.05 \nHILIC (+)")
+  
+```
+
+```{r}
+ggsave(plot = ANOVA_heatmap, width = 8,
+       filename = "plots and figures/ANOVA_sig_heatmap.svg")
+```
+
+
+
+### Paired t tests
+
+Here, I am comparing pre- to post-intervention for both yellow and tomato soy (Red) juice interventions. I also compare post-yellow to post-red intervention. I am using the log transformed values of rel abundance since parametric tests assume normality.
+
+
+
+#### Ctrl no outlier
+```{r}
+# run paired t-tests for control intervention
+ctrl_noOutlier_t.test_paired <- df_for_stats_noOutlier %>%
+  filter(Intervention == "Yellow") %>%
+  dplyr::select(Subject, pre_post, mz_rt, rel_abund_log2) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post, 
+         paired = TRUE, 
+         p.adjust.method = "BH") %>% # Benjamini-Hochberg controlling to lower false positives
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+ctrl_noOutlier_t.test_paired_sig <- ctrl_noOutlier_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(ctrl_noOutlier_t.test_paired_sig)
+
+# how many are significant?
+nrow(ctrl_noOutlier_t.test_paired_sig)
+```
+
+##### Mummichog list
+```{r}
+yellow_for_mummichog <- ctrl_noOutlier_t.test_paired %>%
+  dplyr::select(mz_rt,
+         p,
+         statistic) %>%
+  separate(col = mz_rt,
+           into = c("m.z", "r.t."),
+           sep = "_") %>%
+  rename("t.score" = "statistic")
+
+write_csv(yellow_for_mummichog,
+          "yel-mummichog-list-hilicpos.csv")
+
+```
+
+
+#### Red no outlier
+```{r}
+# run paired t-tests for control intervention
+red_noOutlier_t.test_paired <- df_for_stats_noOutlier %>%
+  filter(Intervention == "Red") %>%
+  dplyr::select(Subject, pre_post, mz_rt, rel_abund_log2) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post, 
+         paired = TRUE, 
+         p.adjust.method = "BH") %>% # Benjamini-Hochberg controlling to lower false positives
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+red_noOutlier_t.test_paired_sig <- red_noOutlier_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(red_noOutlier_t.test_paired_sig)
+
+# how many are significant?
+nrow(red_noOutlier_t.test_paired_sig)
+```
+
+
+##### Mummichog list
+```{r}
+red_for_mummichog <- red_noOutlier_t.test_paired %>%
+  dplyr::select(mz_rt,
+         p,
+         statistic) %>%
+  separate(col = mz_rt,
+           into = c("m.z", "r.t."),
+           sep = "_") %>%
+  rename("t.score" = "statistic")
+
+write_csv(red_for_mummichog,
+          "red-mummichog-list-hilicpos.csv")
+```
+
+
+
+#### Post-red vs post-yellow
+
+```{r}
+# run paired t-tests for post interventions
+post_t.test_paired <- df_for_stats %>%
+  filter(pre_post == "post") %>%
+  dplyr::select(Subject, Intervention, mz_rt, rel_abund_log2) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ Intervention, 
+         paired = TRUE, 
+         p.adjust.method = "BH") %>% # Benjamini-Hochberg controlling to lower false positives
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+post_t.test_paired_sig <- post_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(post_t.test_paired_sig)
+
+# how many are significant?
+nrow(post_t.test_paired_sig)
+```
+
+#### Post-red vs post-yellow no Outlier
+
+```{r}
+# run paired t-tests for post interventions
+post_noOutlier_t.test_paired <- df_for_stats %>%
+  filter(pre_post == "post",
+         Subject != "6106") %>%
+  dplyr::select(Subject, Intervention, mz_rt, rel_abund_log2) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ Intervention, 
+         paired = TRUE, 
+         p.adjust.method = "BH") %>% # Benjamini-Hochberg controlling to lower false positives
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+post_noOutlier_t.test_paired_sig <- post_noOutlier_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(post_noOutlier_t.test_paired_sig)
+
+# how many are significant?
+nrow(post_noOutlier_t.test_paired_sig)
+```
+
+##### Mummichog list
+```{r}
+post_for_mummichog <- post_noOutlier_t.test_paired %>%
+  dplyr::select(mz_rt,
+         p,
+         statistic) %>%
+  separate(col = mz_rt,
+           into = c("m.z", "r.t"),
+           sep = "_") %>%
+  rename("p.value" = "p") %>%
+  rename("t.score" = "statistic")
+
+write_csv(post_for_mummichog,
+          "post-mummichog-list-hilicpos.csv")
+
+```
+
+
+#### Outlier comparison
+Are there any significant features shared between tests with and without outlier?
+
+```{r}
+post_sig_outlier_comp <- list(post_noOutlier_t.test_paired_sig,
+                              post_t.test_paired_sig) %>%
+  reduce(inner_join, by = "mz_rt")
+
+tibble(post_sig_outlier_comp)
+# how many sig features are shared between df vs df w/o outliers
+nrow(post_sig_outlier_comp)
+
+# return sig features present only in df with outlier, and not in df without outlier
+tibble(anti_join(post_noOutlier_t.test_paired_sig,
+          post_t.test_paired_sig,
+          by = "mz_rt"))
+
+# return sig features from df without outlier that are also present in df with outlier
+kable(semi_join(post_noOutlier_t.test_paired_sig,
+          post_t.test_paired_sig,
+          by = "mz_rt"))
+```
+
+### Standard comparisons
+
+Here, I want to only focus on the metabolites that I hypothesized to change. This way I can avoid multiple correction adjustments and see if I can capture any significant differences at different timepoints
+
+#### Wrangle
+
+```{r}
+stds_df_for_stats_wide <- df_for_stats %>%
+  pivot_wider(names_from = mz_rt,
+              values_from = rel_abund_log2) %>%
+  dplyr::select(c(1:11),
+                "118.0867_4.678", #valine
+                "147.0765_6.582", #glutamine
+                "162.1129_5.651", #l-carnitine
+                "166.0861_4.404", #phenylalanine
+                "182.0808_5.647", #tyrosine
+                "147.1129_8.251", #lysine
+                "156.0772_7.669", #histidine
+                "205.0972_4.752", #tryptophan
+                "175.119_8.106", #arginine
+                "241.0311_8.284" #cystine
+                )
+
+# make tidy df
+stds_df_forstats_tidy <- stds_df_for_stats_wide %>%
+  pivot_longer(cols = 12:ncol(.),
+               names_to = "mz_rt",
+               values_to = "rel_abund_log2")
+```
+
+
+```{r}
+# changing factor levels for pre_post_intervention
+stds_df_forstats_tidy$pre_post_intervention <- factor(stds_df_forstats_tidy$pre_post_intervention,
+                              levels = c("pre_Yellow", "post_Yellow", "pre_Red", "post_Red"))
+
+levels(stds_df_forstats_tidy$pre_post_intervention)  
+```
+
+
+#### Boxplots
+```{r, fig.width=12}
+stds_df_forstats_tidy %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  geom_line(aes(group = Subject), colour = "purple", linewidth = 0.2) +
+  facet_wrap(vars(mz_rt), scales = "free_y") + 
+  theme_bw() 
+```
+
+#### Control t-test
+```{r}
+# run paired t-tests for before vs. aftet control intervention
+stds_ctrl_t.test_paired <- stds_df_forstats_tidy %>%
+  filter(Intervention == "Yellow") %>%
+  dplyr::select(Subject, pre_post, mz_rt, rel_abund_log2) %>%
+  filter(Subject != c(6106, 6112)) %>% # remove outliers
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post, 
+         paired = TRUE,
+        p.adjust.method = "BH") %>% 
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+stds_ctrl_t.test_paired_sig <- stds_ctrl_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(stds_ctrl_t.test_paired_sig)
+
+# how many are significant?
+nrow(stds_ctrl_t.test_paired_sig)
+```
+
+#### Red t-tests
+```{r}
+# run paired t-tests for before vs. after red intervention
+stds_red_t.test_paired <- stds_df_forstats_tidy %>%
+  filter(Intervention == "Red") %>%
+  dplyr::select(Subject, pre_post, mz_rt, rel_abund_log2) %>%
+  filter(Subject != c(6106, 6112)) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post, 
+         paired = TRUE,
+         p.adjust.method = "BH") %>% 
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+stds_red_t.test_paired_sig <- stds_red_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(stds_red_t.test_paired_sig)
+
+# how many are significant?
+nrow(stds_red_t.test_paired_sig)
+```
+
+#### Intervention t-tests
+
+```{r}
+# run paired t-tests for post-red vs. post-control intervention
+stds_post_t.test_paired <- stds_df_forstats_tidy %>%
+  filter(pre_post == "post") %>%
+  dplyr::select(Subject, pre_post_intervention, mz_rt, rel_abund_log2) %>%
+  filter(Subject != c(6106, 6112)) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post_intervention, 
+         paired = TRUE,
+         p.adjust.method = "BH") %>% 
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+stds_post_t.test_paired_sig <- stds_post_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(stds_post_t.test_paired_sig)
+
+# how many are significant?
+nrow(stds_post_t.test_paired_sig)
+```
+
+### Volcano plots
+
+#### Post-intervention comparisons 
+
+##### Wrangle (no outlier)
+```{r}
+# add regular relative abundance levels back into the df
+df_for_stats <- df_for_stats %>%
+  mutate(rel_abund = 2^(rel_abund_log2))
+
+# calculate mean rel abund (not log) by sample, and avg fold change (FC) diff by feature
+red_v_yel_volcano_data_noOutlier <- df_for_stats %>%
+  filter(pre_post == "post",
+         Subject != 6106,
+         Subject != 6112) %>% # remove outlier subj
+  group_by(Intervention, Feature_ID, mz_rt) %>%
+  summarize(mean_rel_abund = mean(rel_abund)) %>%
+  pivot_wider(names_from = Intervention, values_from = mean_rel_abund) %>%
+  mutate(FC_postRed_div_postYellow = Red/Yellow) 
+
+# bind back pval
+red_v_yel_tobind_noOutlier <- post_noOutlier_t.test_paired %>%
+  dplyr::select(p)
+
+# calculate log2FC, and -log10p
+red_v_yel_volcano_data_noOutlier <- 
+  bind_cols(red_v_yel_volcano_data_noOutlier, red_v_yel_tobind_noOutlier) %>%
+  mutate(log2_FC_postRed_div_postYellow = if_else(FC_postRed_div_postYellow > 0,
+                                                  log2(FC_postRed_div_postYellow),
+                                                  -(log2(abs(FC_postRed_div_postYellow)))), 
+         neglog10p = -log10(p))
+
+
+# create a df of features passing FC and pval cutoffs higher in post-Red
+postRed_sig_red_v_yel_volcano_noOutlier <- red_v_yel_volcano_data_noOutlier %>%
+  filter(p <= 0.05 & log2_FC_postRed_div_postYellow >= 0.6)
+
+# create a df of features passing FC and pval cutoffs higher in post-control
+postYellow_sig_red_v_yel_volcano_noOutlier <- red_v_yel_volcano_data_noOutlier %>%
+  filter(p <= 0.05 & log2_FC_postRed_div_postYellow <= -0.6)  
+```
+
+##### Export sig features
+
+Create feature lists with significant features along with their clusters
+```{r}
+#post-Red list
+postRed_sig_intrvntn_comp_clusters <- left_join(postRed_sig_red_v_yel_volcano_noOutlier,
+                                                cluster_features,
+                                                by = "mz_rt")
+
+
+
+#post-Yellow list
+postYellow_sig_intrvntn_comp_clusters <- left_join(postYellow_sig_red_v_yel_volcano_noOutlier, cluster_features,
+                                               by = "mz_rt")
+
+
+```
+
+
+```{r, eval=FALSE}
+# export list : sig higher post red 
+write_csv(postRed_sig_intrvntn_comp_clusters,
+          "Feature lists/postRed-sigfeatures-intervntn-comp.csv")
+
+# export list : sig higher post yellow 
+write_csv(postYellow_sig_intrvntn_comp_clusters,
+          "Feature lists/postYellow-sigfeatures-intervntn-comp.csv")
+```
+
+
+##### Plot
+```{r}
+(red_v_yellow_volcano_noOutlier <- red_v_yel_volcano_data_noOutlier %>%
+  ggplot(aes(x = log2_FC_postRed_div_postYellow, y = neglog10p, 
+             text = glue("Mass_retention time: {Feature_ID}
+                         P-value: {p}
+                         Fold change tomato/control: {round(FC_postRed_div_postYellow, 2)}"))) +
+  geom_point(color = "grey") +
+  geom_point(data = postRed_sig_intrvntn_comp_clusters, 
+             aes(x = log2_FC_postRed_div_postYellow, y = neglog10p),
+             color = "tomato") +
+  geom_point(data = postYellow_sig_intrvntn_comp_clusters, 
+             aes(x = log2_FC_postRed_div_postYellow, y = neglog10p),
+             color = "yellow2") +
+  geom_vline(xintercept = 0.6, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = -0.6, linetype = "dashed", color = "grey") +
+  geom_hline(yintercept = 1.3, linetype = "dashed", color = "grey") +
+  coord_cartesian(xlim = c(-5, 8)) +
+  labs(title = "Volcano Plot of Features Different in People After Tomato-Soy and Control Juice Consumption",
+       subtitle = "Red points are higher after tomato-soy juice consumption while yellow points are higher \nafter control tomato juice consumption. Subjects 6106 and 6112 removed",
+       caption = "Vertical dashed lines represent a log2 fold change > 0.6 or < -0.6, and horizontal dashed line represents an FDR corrected \np-value of 0.05.",
+       x = "Log2 Fold Change (TomatoSoy/Control)",
+       y = "-Log10(P-value)") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 12, hjust = 0),
+        plot.caption = element_text(hjust = 0.5)))
+
+(red_v_yellow_volcano_ggplotly_noOutlier <- ggplotly(red_v_yellow_volcano_noOutlier, tooltip = "text"))
+```
+
+Save plots
+```{r, eval=FALSE}
+# save volcano plot
+ggsave(plot = red_v_yellow_volcano_noOutlier,
+       filename = "plots and figures/volcano plots/red_v_yellow_volcano_noOutlier.svg")
+
+# save interactive volcano plot
+saveWidget(widget = red_v_yellow_volcano_ggplotly_noOutlier,
+           file = "plots and figures/volcano plots/interactive_redvyellow_volcano_plot_noOutlier.html")
+```
+
+
+#### Red
+
+##### Wrangle (no outlier)
+```{r}
+# calculate mean rel abund (not log) by sample, and avg fold change (FC) diff by feature
+red_volcano_data_noOutlier <- df_for_stats %>%
+  filter(Intervention == "Red",
+         Subject != 6106,
+         Subject != 6112) %>%
+  group_by(pre_post, Feature_ID, mz_rt) %>%
+  summarize(mean_rel_abund = mean(rel_abund)) %>%
+  pivot_wider(names_from = pre_post, values_from = mean_rel_abund) %>%
+  mutate(FC_post_div_pre = post/pre) 
+
+# bind back pval
+red_tobind_noOutlier <- red_noOutlier_t.test_paired %>%
+  dplyr::select(p)
+
+# calculate log2FC, and -log10p
+red_volcano_data_noOutlier <- 
+  bind_cols(red_volcano_data_noOutlier, red_tobind_noOutlier) %>%
+  mutate(log2_FC_post_div_pre = log2(FC_post_div_pre),
+         neglog10p = -log10(p))
+
+
+# create a df of features passing FC and pval cutoffs higher in post-intervention compared to pre
+red_pre_v_post_volcano_noOutlier <- red_volcano_data_noOutlier %>%
+  filter(p <= 0.05 & abs(log2_FC_post_div_pre) >= 0.6)
+
+```
+
+##### Export sig features
+
+Create feature lists with significant features along with their clusters
+```{r}
+red_sig_prepost_comp_clusters <- left_join(red_pre_v_post_volcano_noOutlier, cluster_features,
+                                               by = "mz_rt")
+
+```
+
+
+```{r, eval=FALSE}
+# export 
+write_csv(red_sig_prepost_comp_clusters,
+          "Feature lists/Red-sigfeatures-PrevsPost-noOutliers.csv")
+```
+
+
+##### Plot
+```{r}
+(red_volcano_noOutlier <- red_volcano_data_noOutlier %>%
+  ggplot(aes(x = log2_FC_post_div_pre, y = neglog10p, 
+             text = glue("Mass_retention time: {Feature_ID}
+                         P-value: {p}
+                         Fold change post/pre: {round(FC_post_div_pre, 2)}"))) +
+  geom_point(color = "grey") +
+  geom_point(data = red_sig_prepost_comp_clusters, 
+             aes(x = log2_FC_post_div_pre, y = neglog10p),
+             color = "tomato") +
+  geom_vline(xintercept = 0.6, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = -0.6, linetype = "dashed", color = "grey") + 
+  geom_hline(yintercept = 1.3, linetype = "dashed", color = "grey") +
+  coord_cartesian(xlim = c(-5, 6)) +
+  labs(title = "Volcano Plot of Features Different in People After Tomato-Soy Juice Consumption",
+       subtitle = "Red points are higher after tomato-soy juice consumption when compared to prior to consumption. \nSubjects 6106 and 6112 removed",
+       caption = "Vertical dashed lines represent an abs(log fold change) > 0.6, and horizontal dashed line represents an FDR corrected \np-value of 0.05.",
+       x = "Log2 Fold Change (Post/Pre)",
+       y = "-Log10(P-value)") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 12, hjust = 0),
+        plot.caption = element_text(hjust = 0.5)))
+
+(red_volcano_ggplotly_noOutlier <- ggplotly(red_volcano_noOutlier, tooltip = "text"))
+```
+
+Save plots
+```{r, eval=FALSE}
+# save volcano plot
+ggsave(plot = red_volcano_noOutlier,
+       filename = "plots and figures/volcano plots/red_volcano_noOutlier.svg")
+
+# save interactive volcano plot
+saveWidget(widget = red_volcano_ggplotly_noOutlier,
+           file = "plots and figures/volcano plots/interactive_red_volcano_plot_noOutlier.html")
+```
+
+#### Yellow
+
+##### Wrangle (no outlier)
+```{r}
+# calculate mean rel abund (not log) by sample, and avg fold change (FC) diff by feature
+yel_volcano_data_noOutlier <- df_for_stats %>%
+  filter(Intervention == "Yellow",
+         Subject != 6106,
+         Subject != 6112) %>%
+  group_by(pre_post, Feature_ID, mz_rt) %>%
+  summarize(mean_rel_abund = mean(rel_abund)) %>%
+  pivot_wider(names_from = pre_post, values_from = mean_rel_abund) %>%
+  mutate(FC_post_div_pre = post/pre) 
+
+# bind back pval
+yel_tobind_noOutlier <- ctrl_noOutlier_t.test_paired %>%
+  dplyr::select(p)
+
+# calculate log2FC, and -log10p
+yel_volcano_data_noOutlier <- 
+  bind_cols(yel_volcano_data_noOutlier, yel_tobind_noOutlier) %>%
+  mutate(log2_FC_post_div_pre = log2(FC_post_div_pre),
+         neglog10p = -log10(p))
+
+
+# create a df of features passing FC and pval cutoffs higher in post-intervention compared to pre
+yel_pre_v_post_volcano_noOutlier <- yel_volcano_data_noOutlier %>%
+  filter(p <= 0.05 & abs(log2_FC_post_div_pre) >= 0.6)
+
+```
+
+##### Export sig features
+
+Create feature lists with significant features along with their clusters
+```{r}
+yel_sig_prepost_comp_clusters <- left_join(yel_pre_v_post_volcano_noOutlier, cluster_features,
+                                               by = "mz_rt")
+
+```
+
+```{r, eval=FALSE}
+# export
+write_csv(yel_sig_prepost_comp_clusters,
+          "Yellow-sigfeatures-PrevsPost-noOutliers.csv")
+```
+
+
+##### Plot
+```{r}
+(yel_volcano_noOutlier <- yel_volcano_data_noOutlier %>%
+  ggplot(aes(x = log2_FC_post_div_pre, y = neglog10p, 
+             text = glue("Mass_retention time: {Feature_ID}
+                         P-value: {p}
+                         Fold change post/pre: {round(FC_post_div_pre, 2)}"))) +
+  geom_point(color = "grey") +
+  geom_point(data = yel_sig_prepost_comp_clusters, 
+             aes(x = log2_FC_post_div_pre, y = neglog10p),
+             color = "yellow2") +
+  geom_vline(xintercept = 0.6, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = -0.6, linetype = "dashed", color = "grey") +
+  geom_hline(yintercept = 1.3, linetype = "dashed", color = "grey") +
+  coord_cartesian(xlim = c(-6, 6)) +
+  labs(title = "Volcano Plot of Features Different in People After Control, Yellow Tomato Juice Consumption",
+       subtitle = "Yellow points are higher after control juice consumption when compared to prior to consumption.\nSubjects 6106 and 6112 removed",
+       caption = "Vertical dashed lines represent abs(log2 fold change) > 0.6, and horizontal dashed line represents an FDR corrected \np-value of 0.05.",
+       x = "Log2 Fold Change (Post/Pre)",
+       y = "-Log10(P-value)") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 12, hjust = 0),
+        plot.caption = element_text(hjust = 0.5)))
+
+(yel_volcano_ggplotly_noOutlier <- ggplotly(yel_volcano_noOutlier, tooltip = "text"))
+```
+
+Save plots
+```{r, eval=FALSE}
+# save volcano plot
+ggsave(plot = yel_volcano_noOutlier,
+       filename = "plots and figures/volcano plots/yel_volcano_noOutlier.svg")
+
+# save interactive volcano plot
+saveWidget(widget = yel_volcano_ggplotly_noOutlier,
+           file = "plots and figures/volcano plots/interactive_yel_volcano_plot_noOutlier.html")
+```
+
+
+## Joined lists
+Here, I want to venn significant features before I begin to look more into them. I am interested in the following effects: tomato effect, lycopene and/or soy isoflavones effect.
+
+### Tomato effect
+1. Tomato effect: join a list that only keeps features that are both significant in pre vs. post-red and pre vs. post-yellow. Manually deleted the features that don't have the same directionality
+
+```{r}
+# keep only features present in both pre vs post red and pre vs post yellow
+tomato_effect <- inner_join(red_sig_prepost_comp_clusters,
+                            yel_sig_prepost_comp_clusters,
+                            by = "mz_rt")
+dim(tomato_effect)
+```
+
+
+#### Boxplots
+
+##### all sig tomato features
+
+```{r}
+# metabs with pval < 0.05 and fc >= 1.51. bind back key
+sigmetabs_tomato_effect <- tomato_effect %>%
+  left_join(df_for_stats_noOutlier)
+```
+
+
+```{r}
+# changing factor levels for pre_post_intervention
+sigmetabs_tomato_effect$pre_post_intervention <- factor(sigmetabs_tomato_effect$pre_post_intervention,
+                              levels = c("pre_Yellow", "post_Yellow", "pre_Red", "post_Red"))
+
+levels(sigmetabs_tomato_effect$pre_post_intervention)  
+```
+
+```{r, fig.width=10}
+sigmetabs_tomato_effect %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  geom_line(aes(group = Subject), fill = "brown", linewidth = 0.2) +
+  facet_wrap(vars(Feature_ID), scales = "free_y") + 
+  theme_clean() 
+```
+
+
+```{r}
+sigmetabs_tomato_effect %>% 
+  filter(mz_rt == "262.1284_5.3") %>%
+  ggpaired(x = "pre_post_intervention", y = "rel_abund_log2", 
+           fill = "Intervention", line.color = "gray",
+           id = "Subject", line.size = 0.15) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy")) +
+  geom_point() +
+  scale_x_discrete(labels = c("pre", "post", "pre", "post")) +
+  labs(x = "",
+       y = "Log2 relative abundance",
+       title = "Medium chain acylcarnitine (CAR 4:1;O2)",
+       subtitle = "Putative annotation") +
+  stat_compare_means(comparisons = my_comparisons, method = "t.test", paired = TRUE, p.adjust.method = "BH", label = "p.signif") +
+  theme_classic(base_size = 18, base_family = "sans") +
+  theme(axis.text.x = element_text(angle = 0))
+```
+
+
+### Lyc/soy effect
+2. lycopene and/or soy isoflavones effect: join a list that only keeps features that are:
+- significantly different between post-Red and post-Yellow, 
+- and significant between pre- and post-Red. 
+- remove features that are significant between pre-Yellow and post-Yellow.
+
+```{r}
+# combine sig features from post-red vs post-yellow
+sig_postintervention_noOutlier <- full_join(postRed_sig_intrvntn_comp_clusters,
+                                               postYellow_sig_intrvntn_comp_clusters)
+dim(sig_postintervention_noOutlier)
+
+# select only sig features that are present when comparing pre-Red to post-Red
+lyc_soy_effect <- inner_join(sig_postintervention_noOutlier,
+                             red_sig_prepost_comp_clusters,
+                             by = "mz_rt") 
+dim(lyc_soy_effect)
+
+```
+
+
+#### Mummichog matches
+
+Mummichog makes a list of hits for all of the compounds, so we only need to do an inner join for one of the lists. The outcome would be the same for all of the lists used since I have to input my whole dataset (no cutoffs) into analysis. 
+
+```{r}
+mummichog_mass_matches_lycsoy <- inner_join(lyc_soy_effect,
+                                            red_mummichog_hits,
+                                            by = "mz_rt")
+
+length(unique(mummichog_mass_matches_lycsoy$mz_rt)) # how many?
+
+tibble(unique(mummichog_mass_matches_lycsoy$mz_rt)) # which features have a hit with mummichog?
+
+```
+
+
+
+
+```{r}
+# map KEGG IDs to compound names
+lycsoy_KEGGmatches <- as.data.frame(cpdkegg2name(mummichog_mass_matches_lycsoy$Matched.Compound))
+
+mummichog_mass_matches_lycsoy$NAME <- lycsoy_KEGGmatches$NAME
+
+```
+
+
+
+#### Boxplots
+
+
+##### all sig tomato features
+
+```{r}
+# metabs with pval < 0.05 and fc >= 1.51
+sigmetabs_lycsoy_effect <- lyc_soy_effect %>%
+  left_join(df_for_stats_noOutlier)
+```
+
+
+```{r}
+# changing factor levels for pre_post_intervention
+sigmetabs_lycsoy_effect$pre_post_intervention <- factor(sigmetabs_lycsoy_effect$pre_post_intervention,
+                                                                levels = c("pre_Yellow", "post_Yellow", 
+                                                                           "pre_Red", "post_Red"))
+
+levels(sigmetabs_lycsoy_effect$pre_post_intervention)  
+```
+
+```{r, fig.height=10, fig.width=10}
+sigmetabs_lycsoy_effect %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  geom_line(aes(group = Subject), linewidth = 0.2) +
+  facet_wrap(vars(Feature_ID), scales = "free_y") + 
+  theme_clean() 
+```
+
+
+### Low carotenoid tomato effect
+2. yellow tomato effect: use list that only keeps features that are both significant between post-Red and post-Yellow timepoints, and significant between pre- and post-Yellow. These features are NOT significant between pre-Yellow and post-Yellow.
+
+```{r}
+# sig features from post-red vs post-yellow
+dim(sig_postintervention_noOutlier)
+
+# select only sig features that are present when comparing pre-Yellow to post-Yellow
+low_carot_tomato_effect <- inner_join(sig_postintervention_noOutlier,
+                             yel_sig_prepost_comp_clusters,
+                             by = "mz_rt") 
+dim(low_carot_tomato_effect)
+```
+
+
+#### Boxplots
+
+##### all sig yellow tom features
+
+```{r}
+# metabs with pval < 0.05 and fc >= 1.51
+sigmetabs_yellow_effect <- low_carot_tomato_effect %>%
+  left_join(df_for_stats_noOutlier)
+```
+
+
+```{r}
+# changing factor levels for pre_post_intervention
+sigmetabs_yellow_effect$pre_post_intervention <- factor(sigmetabs_yellow_effect$pre_post_intervention,
+                                                                levels = c("pre_Yellow", "post_Yellow", 
+                                                                           "pre_Red", "post_Red"))
+
+levels(sigmetabs_yellow_effect$pre_post_intervention)  
+```
+
+```{r}
+sigmetabs_yellow_effect %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  geom_line(aes(group = Subject), fill = "brown", linewidth = 0.2) +
+  facet_wrap(vars(Feature_ID), scales = "free_y") + 
+  theme_clean() 
+```
+
+# Immuno Correlations
+
+IL-5, IL-12p70, and GM-CSF were significantly decreased after tomato-soy intervention (only when comparing pre to post in Red) according to Wilcoxon rank-sum tests (p<0.05). Immune cell types were significantly altered in all 3 comparisons - so let's see how these significant immuno outcomes correlate with metabolites found to be significant at p > 0.05 and FC >=1.61.
+
+Import other outcomes (carotenoids and immunology data)
+```{r}
+# load data
+carot_immunology_meta <- read_excel("CompiledData_Results_Meta.xlsx",
+                         sheet = "metadata_corrected_withsequence")
+
+# clean up variable names 
+carot_immunology_meta <- clean_names(carot_immunology_meta)
+```
+
+## Wrangle 
+
+```{r}
+# convert variables that should be factors to factors
+carot_immunology_meta <- carot_immunology_meta %>%
+  filter(intervention != "Baseline") %>%
+  mutate(across(.cols = c("patient_id", "period", 
+                          "intervention", "intervention_week", 
+                          "pre_post", "sex", "sequence"),
+                .fns = as.factor))
+
+
+# some stuff came in as characters but should be numeric
+carot_immunology_meta <- carot_immunology_meta %>%
+  mutate(across(.cols = c("il_2", "il_10", "il_13", "il_4"),
+                .fns = as.numeric))
+
+
+
+# changing factor levels for pre_post
+carot_immunology_meta$pre_post <- factor(carot_immunology_meta$pre_post,
+                              levels = c("pre", "post"))
+
+levels(carot_immunology_meta$pre_post)        
+
+# Calculate total_cis_lyc, total_lyc, and total_carotenoids
+carot_immunology_meta <- carot_immunology_meta %>%
+  mutate(total_cis_lyc = other_cis_lyc + x5_cis_lyc,
+         total_lyc = all_trans_lyc + total_cis_lyc,
+         total_carotenoids = lutein + zeaxanthin + b_cryptoxanthin + 
+                             a_carotene + b_carotene + total_lyc)
+```
+
+
+### Rm outliers + more wrangling
+
+```{r}
+
+# take outliers out of carot_immuno df 
+carot_immunology_meta_noOutlier <- carot_immunology_meta %>%
+  filter(patient_id != 6106,
+         patient_id != 6112)
+
+# add sig immuno outcome columns to dataset
+forcorr_metabslog2_immuno_noOutlier <- df_for_stats_wide_noOutlier %>%
+  mutate(il_5 = carot_immunology_meta_noOutlier$il_5,
+         il_12p70 = carot_immunology_meta_noOutlier$il_12p70,
+         gm_csf = carot_immunology_meta_noOutlier$gm_csf,
+         total_lyc = carot_immunology_meta_noOutlier$total_lyc) %>%
+  #log2 transform cytokines and total lycopene levels
+  mutate_at(c("il_5", "il_12p70", "gm_csf" ,"total_lyc"), log2)
+
+
+```
+
+
+Here, I am going to look at correlations between fold change differences and sig metabolites from the lycopene/soy effect list
+
+### More wrangling
+No outliers
+
+Subset df's into pre and post 
+```{r}
+# pre
+forcorr_pre_metabslog2_immuno_noOutlier <- forcorr_metabslog2_immuno_noOutlier %>%
+  dplyr::select(Subject, Intervention, pre_post, 12:ncol(.)) %>%
+  filter(pre_post == "pre")
+
+# post 
+forcorr_post_metabslog2_immuno_noOutlier <- forcorr_metabslog2_immuno_noOutlier %>%
+  dplyr::select(Subject, Intervention, pre_post, 12:ncol(.)) %>%
+  filter(pre_post == "post")
+```
+
+Create df with differences calculated for each outcome
+```{r}
+# difference for calculated for each outcome
+forcorr_diff_metabslog2_immuno_noOutlier <- forcorr_post_metabslog2_immuno_noOutlier[,-c(1:3)] - forcorr_pre_metabslog2_immuno_noOutlier[,-c(1:3)]
+
+```
+
+## All metabs corr
+
+```{r}
+forcorr_diff_allmetabs_immuno_noOutlier <- forcorr_diff_metabslog2_immuno_noOutlier %>%
+  # add subject and intervention back to df.
+  mutate(Subject = forcorr_post_metabslog2_immuno_noOutlier$Subject,
+         Intervention = forcorr_post_metabslog2_immuno_noOutlier$Intervention)
+
+# correlation table
+corr_results_metabs_immuno_diff_noOutlier <- forcorr_diff_allmetabs_immuno_noOutlier %>% 
+  correlate(method = "spearman") %>%
+  rearrange()
+```
+
+
+Look for strongly correlated outcomes. R^2 >= to 0.5
+```{r}
+strongcorr_allmetabs_immunodata <- corr_results_metabs_immuno_diff_noOutlier %>%
+  dplyr::select(term, il_5, il_12p70, gm_csf, total_lyc) %>%
+  filter(abs(corr_results_metabs_immuno_diff_noOutlier$il_5) >= 0.5 |
+           abs(corr_results_metabs_immuno_diff_noOutlier$il_12p70) >= 0.5 |
+           abs(corr_results_metabs_immuno_diff_noOutlier$gm_csf) >= 0.5 |
+           abs(corr_results_metabs_immuno_diff_noOutlier$total_lyc) >= 0.5)
+```
+
+## Lycsoy metab list Corr
+These are correlations based on significant metabolites with FDR < 0.05 AND FC > 1.51 (from lyc/soy effect list) against immuno outcomes that were significant (padj < 0.05) when comparing pre to post red intervention.
+
+```{r}
+# add subject and intervention back to df. Select only significant metabolites (pval > 0.05 and FC >=1.51) that are in lyc/soy effect list
+lyc_soy_forcorr_diff_metabslog2_immuno_noOutlier <- forcorr_diff_metabslog2_immuno_noOutlier %>%
+  mutate(Subject = forcorr_post_metabslog2_immuno_noOutlier$Subject,
+         Intervention = forcorr_post_metabslog2_immuno_noOutlier$Intervention) %>%
+  dplyr::select(Subject, Intervention, 
+                il_5, il_12p70, gm_csf, 
+                total_lyc, all_of(sigmetabs_lycsoy_effect$Feature_ID))
+
+# correlation table
+lycsoy_corr_results_metabs_immuno_diff_noOutlier <- lyc_soy_forcorr_diff_metabslog2_immuno_noOutlier %>% 
+  correlate(method = "spearman") %>%
+  rearrange() 
+
+kable(lycsoy_corr_results_metabs_immuno_diff_noOutlier, format = "markdown", digits = 3)
+```
+
+```{r}
+write_csv(lycsoy_corr_results_metabs_immuno_diff_noOutlier, "lyc_soy_fx_corr_prepostRed.csv")
+```
+
+
+Look for strongly correlated outcomes. R^2 >= to 0.5
+```{r}
+lycsoy_sigcorr_metabsP05_FC1.6_immunodata <- lycsoy_corr_results_metabs_immuno_diff_noOutlier %>%
+  dplyr::select(term, il_5, il_12p70, gm_csf, total_lyc) %>%
+  filter(abs(lycsoy_corr_results_metabs_immuno_diff_noOutlier$il_5) >= 0.5 |
+           abs(lycsoy_corr_results_metabs_immuno_diff_noOutlier$il_12p70) >= 0.5 |
+           abs(lycsoy_corr_results_metabs_immuno_diff_noOutlier$gm_csf) >= 0.5 |
+           abs(lycsoy_corr_results_metabs_immuno_diff_noOutlier$total_lyc) >= 0.5)
+
+ kable(lycsoy_red_sigcorr_metabsP05_FC1.6_immunodata, digits = 3, caption = "sig metabolites in lyc/soy effect list and sig immuno outcomes with strong correlations. R^2 >= to 0.5. Based on Pre vs. post-red and pre v. post-control log2fc")
+```
+
+
+
+### plot
+
+```{r, fig.height=10, fig.width=8}
+lycsoy_ggcorr_noOutlier <- round(cor(lyc_soy_forcorr_diff_metabslog2_immuno_noOutlier[,-c(1:2)], method = "spearman"), digits = 2)
+
+
+p.mat.lycsoy <- cor_pmat(lycsoy_ggcorr_noOutlier, method = "spearman")
+
+(lyc_soy_immuno_metabs_ggcorrplot <- lycsoy_ggcorr_noOutlier %>%
+  ggcorrplot(lab = TRUE, 
+             outline.color = "white", type = "full", hc.order = T,
+             ggtheme = ggthemes::theme_clean(base_size = 8, base_family = "sans"),
+             colors = c("#6D9EC1", "white", "#E46726"),
+             p.mat = p.mat.lycsoy,
+             sig.level = 0.05,
+             insig = "blank") +
+  theme(axis.text.x = element_text(angle = 90, size = 12),
+        axis.text.y = element_text(size = 12)))
+```
+
+
+```{r, fig.height=10, fig.width=8}
+corrplot(lycsoy_ggcorr_noOutlier, order = 'hclust', type = "upper", method = "ellipse")
+```
+
+
+
+# Scatter plots
+
+## Total lycopene
+
+```{r}
+forcorr_diff_allmetabs_immuno_noOutlier %>%
+  ggplot(aes(x = il_12p70,
+             y = total_lyc)) +
+  geom_point(aes(color = factor(Intervention, 
+                               levels = c("Yellow",
+                                          "Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("yellow2",
+                                "darkred")) +
+  labs(title = "Metabolite LFC vs. Cytokine LFC",
+       color = "Intervention") +
+  theme_bw() 
+```
+
+
+```{r}
+forcorr_diff_allmetabs_immuno_noOutlier %>%
+  ggplot(aes(x = il_5,
+             y = total_lyc)) +
+  geom_point(aes(color = factor(Intervention, 
+                               levels = c("Yellow",
+                                          "Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("yellow2",
+                                "darkred")) +
+  labs(title = "Metabolite LFC vs. Cytokine LFC",
+       color = "Intervention") +
+  theme_bw() 
+```
+
+
+## 153.1273_3.887 
+
+```{r}
+forcorr_diff_allmetabs_immuno_noOutlier %>%
+  ggplot(aes(x = il_12p70,
+             y = `153.1273_3.887`)) +
+  geom_point(aes(color = factor(Intervention, 
+                               levels = c("Yellow",
+                                          "Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("yellow2",
+                                "darkred")) +
+  labs(title = "Metabolite LFC vs. Cytokine LFC",
+       color = "Intervention") +
+  theme_bw() 
+```
+
+
+```{r}
+forcorr_diff_allmetabs_immuno_noOutlier %>%
+  ggplot(aes(x = il_5,
+             y = `153.1273_3.887`)) +
+  geom_point(aes(color = factor(Intervention, 
+                               levels = c("Yellow",
+                                          "Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("yellow2",
+                                "darkred")) +
+  labs(title = "Metabolite LFC vs. Cytokine LFC",
+       color = "Intervention") +
+  theme_bw() 
+```
+
+
+```{r}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = gm_csf,
+             y = `153.1273_3.887`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+
+```{r}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = il_5,
+                 y = `153.1273_3.887`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+```{r}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = il_12p70,
+                 y = `153.1273_3.887`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+## Dihydrodaidzein glucuronide
+
+```{r}
+forcorr_diff_allmetabs_immuno_noOutlier %>%
+  ggplot(aes(x = il_12p70,
+             y = `dihydrodaidzein glucuronide`)) +
+  geom_point(aes(color = factor(Intervention, 
+                               levels = c("Yellow",
+                                          "Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("yellow2",
+                                "darkred")) +
+  labs(title = "Metabolite LFC vs. Cytokine LFC",
+       color = "Intervention") +
+  theme_bw()
+```
+
+```{r}
+forcorr_diff_allmetabs_immuno_noOutlier %>%
+  ggplot(aes(x = il_5,
+             y = `dihydrodaidzein glucuronide`)) +
+  geom_point(aes(color = factor(Intervention, 
+                               levels = c("Yellow",
+                                          "Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("yellow2",
+                                "darkred")) +
+  labs(title = "Metabolite LFC vs. Cytokine LFC",
+       color = "Intervention") +
+  theme_bw() 
+```
+
+```{r, fig.width=8}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = il_12p70,
+             y = `dihydrodaidzein glucuronide`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+
+```{r, fig.width=8}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = il_5,
+             y = `dihydrodaidzein glucuronide`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+```{r, fig.width=8}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = gm_csf,
+             y = `dihydrodaidzein glucuronide`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+## 259.0977_3.914
+
+```{r, fig.width=8}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = il_12p70,
+             y = `259.0977_3.914`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+
+```{r, fig.width=8}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = il_5,
+             y = `259.0977_3.914`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+
+
+```{r, fig.width=8}
+forcorr_metabslog2_immuno_noOutlier %>%
+  ggplot(aes(x = gm_csf,
+             y = `259.0977_3.914`)) +
+  geom_point(aes(color = factor(pre_post_intervention, 
+                               levels = c("pre_Yellow",
+                                          "post_Yellow",
+                                          "pre_Red",
+                                          "post_Red")))) +
+  geom_point(color = "black", shape = 1) +
+  stat_correlation(use_label(c("R", "P")), method = "spearman") +
+  stat_poly_line() +
+  scale_color_manual(values = c("lemonchiffon1", "yellow2",
+                                  "rosybrown2", "darkred")) +
+  labs(color = "Timepoint") +
+  theme_bw() 
+```
+

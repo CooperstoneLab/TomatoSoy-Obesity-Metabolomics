@@ -1,0 +1,129 @@
+---
+title: "Untitled"
+author: "Maria Sholola"
+date: "2023-09-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries 
+
+```{r}
+library(xcms) # RT alignment
+library(CAMERA) # Feature annotation?
+library(fuzzyjoin) # to join lists based on condition
+library(MScombine) # could help with combining datasets
+library(tidyverse)
+```
+# Load datasets 
+
+Read in datasets that include significant features in urine after RED juice from HILIC and C18 (both ESI modes). (FC >= 1.2(log2 FC>= 0.6), pval <0.05)
+
+```{r}
+c18POS_lycsoy <- read_csv("C18-Pos-analysis/Feature lists/sig-features-lyc-soy-effect.csv")
+
+c18NEG_lycsoy <- read_csv("C18-Neg-analysis/Feature lists/sig-features-lyc-soy-effect.csv")
+
+hilicPOS_lycsoy <- read_csv("HILIC-Pos-analysis/Feature lists/sig-features-lyc-soy-effect.csv")
+
+hilicNEG_lycsoy <- read_csv("HILIC-Neg-analysis/Feature lists/sig-features-lyc-soy-effect.csv")
+```
+
+```{r}
+# Full dataframes
+c18pos_full <- xcmsRaw("C18-Pos-analysis/")
+```
+
+
+## Wrangle
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+c18pos_mzrt <- c18POS_lycsoy %>%
+  select(mz.x, rt.x) %>%
+  mutate(mz_c18pos = mz.x,
+         rt_c18pos = rt.x,
+         .keep = "none")
+
+c18neg_mzrt <- c18NEG_lycsoy %>%
+  select(mz.x, rt.x) %>%
+  mutate(mz_c18neg = mz.x,
+         rt_c18neg = rt.x,
+         .keep = "none")
+```
+
+
+```{r}
+# create multi-match-fun (multi-match function), in order to allow the merging of features that we think are the same. Since the datasets are coming from separate modes of analysis, we expect masses to be slightly different, this function allows us to classify them as the same feature
+
+mmf <- function(x,y) {
+  mz_diff <- abs(x[,1] - y[,1])
+  out <- data_frame(merge = mz_diff <= 0.002,
+                    mz_diff = mz_diff)
+  return(out)
+}
+
+test <- mmf(c18neg_mzrt, c18neg_mzrt)
+```
+
+
+```{r}
+joined_postRed_intervention_comp <- fuzzy_join(c18pos_mzrt,
+                                               c18neg_mzrt,
+                                               multi_by = c("mz_c18pos" = "mz_c18neg"),
+                                               multi_match_fun = mmf,
+                                               mode = "inner")
+```
+
+
+
+```{r}
+hilicpos_mz <- hilicPOS_postRed_intervention_comp %>% 
+  select(mz) %>%
+  mutate(mz_hilicpos = mz,
+         .keep = "none")
+
+hilicneg_mz <- hilicNEG_postRed_intervention_comp %>%
+  select(mz) %>%
+  mutate(mz_hilicneg = mz,
+         .keep = "none")
+```
+
+
+```{r}
+# create multi-match-fun (multi-match function), in order to allow the merging of features that we think are the same. Since the datasets are coming from separate modes of analysis, we expect masses to be slightly different, this function allows us to classify them as the same feature
+
+mmf <- function(x,y) {
+  mz_diff <- abs(x[,8] - y[,8])
+  out <- data_frame(merge = mz_diff <= 0.002,
+                    mz_diff = mz_diff)
+  return(out)
+}
+
+mmf(c18POS_postRed_intervention_comp, c18NEG_postRed_intervention_comp)
+```
+
+
+```{r}
+joined_postRed_intervention_comp <- fuzzy_join(c18POS_postRed_intervention_comp,
+                                               hilicPOS_postRed_intervention_comp,
+                                               multi_by = c("mz" = "mz"),
+                                               multi_match_fun = mmf,
+                                               mode = "full")
+```
+

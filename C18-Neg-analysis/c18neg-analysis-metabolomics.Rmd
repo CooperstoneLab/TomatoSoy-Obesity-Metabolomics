@@ -1406,6 +1406,128 @@ nrow(semi_join(post_noOutlier_t.test_paired_sig,
 ```
 
 
+### Standard comparisons
+
+Here, I want to only focus on the metabolites that I hypothesized to change. This way I can avoid multiple correction adjustments and see if I can capture any significant differences at different timepoints
+
+#### Wrangle
+
+```{r}
+stds_df_for_stats_wide <- df_for_stats %>%
+  dplyr::select(!rel_abund) %>%
+  pivot_wider(names_from = mz_rt,
+              values_from = rel_abund_log2) %>%
+  dplyr::select(c(1:11),
+                "178.0515_3.479", #hippuric acid
+                "179.0556_0.643", #glucose
+                "154.0621_0.609", #histidine
+                "191.0203_0.697", #citric acid
+                "212.0027_3.304", #indoxyl sulfate
+                "253.0503_5.048", #daidzein
+                "257.0816_6.056" #O-DMA
+                ) 
+
+# make tidy df
+stds_df_forstats_tidy <- stds_df_for_stats_wide %>%
+  pivot_longer(cols = 12:ncol(.),
+               names_to = "mz_rt",
+               values_to = "rel_abund_log2")
+```
+
+
+```{r}
+# changing factor levels for pre_post_intervention
+stds_df_forstats_tidy$pre_post_intervention <- factor(stds_df_forstats_tidy$pre_post_intervention,
+                              levels = c("pre_Yellow", "post_Yellow", "pre_Red", "post_Red"))
+
+levels(stds_df_forstats_tidy$pre_post_intervention)  
+```
+
+
+#### Boxplots
+```{r}
+stds_df_forstats_tidy %>% 
+  ggplot(aes(x = pre_post_intervention, y = rel_abund_log2, fill = Intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(mz_rt), scales = "free_y") + 
+  theme_bw() 
+```
+
+#### Control t-test
+```{r}
+# run paired t-tests for before vs. aftet control intervention
+stds_ctrl_t.test_paired <- stds_df_forstats_tidy %>%
+  filter(Intervention == "Yellow") %>%
+  dplyr::select(Subject, pre_post, mz_rt, rel_abund_log2) %>%
+  filter(Subject != 6106) %>% # remove outliers
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post, 
+         paired = TRUE) %>% 
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+stds_ctrl_t.test_paired_sig <- stds_ctrl_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(stds_ctrl_t.test_paired_sig)
+
+# how many are significant?
+nrow(stds_ctrl_t.test_paired_sig)
+```
+
+#### Red t-tests
+```{r}
+# run paired t-tests for before vs. after red intervention
+stds_red_t.test_paired <- stds_df_forstats_tidy %>%
+  filter(Intervention == "Red") %>%
+  dplyr::select(Subject, pre_post, mz_rt, rel_abund_log2) %>%
+  filter(Subject != 6106) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post, 
+         paired = TRUE) %>% 
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+stds_red_t.test_paired_sig <- stds_red_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(stds_red_t.test_paired_sig)
+
+# how many are significant?
+nrow(stds_red_t.test_paired_sig)
+```
+
+#### Intervention t-tests
+
+```{r}
+# run paired t-tests for post-red vs. post-control intervention
+stds_post_t.test_paired <- stds_df_forstats_tidy %>%
+  filter(pre_post == "post") %>%
+  dplyr::select(Subject, pre_post_intervention, mz_rt, rel_abund_log2) %>%
+  filter(Subject != 6106) %>%
+  group_by(mz_rt) %>%
+  t_test(rel_abund_log2 ~ pre_post_intervention, 
+         paired = TRUE) %>% 
+  add_significance()
+```
+
+Statistically significant features
+```{r}
+# which features are significant?
+stds_post_t.test_paired_sig <- stds_post_t.test_paired %>%
+  filter(p <= 0.05)
+tibble(stds_post_t.test_paired_sig)
+
+# how many are significant?
+nrow(stds_post_t.test_paired_sig)
+```
+
 ### Volcano plots
 
 #### Post-intervention comparisons 

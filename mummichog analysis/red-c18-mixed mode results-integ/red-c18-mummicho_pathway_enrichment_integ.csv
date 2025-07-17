@@ -1,0 +1,72 @@
+"","Total_Size","Hits","Sig_Hits","Mummichog_Pvals","GSEA_Pvals","Combined_Pvals"
+"Vitamin B2 (riboflavin) metabolism",8,2,2,0.07407,0.02439,0.01322
+"Electron transport chain",7,1,1,0.2218,0.02041,0.02896
+"Fatty acid oxidation",35,1,1,0.2218,0.02041,0.02896
+"C21-steroid hormone biosynthesis and metabolism",112,17,14,0.1133,0.04,0.029
+"Caffeine metabolism",11,7,7,0.04506,0.1837,0.04796
+"Pentose phosphate pathway",37,8,7,0.04506,0.2245,0.05658
+"Tyrosine metabolism",160,37,18,0.4484,0.02439,0.06033
+"Tryptophan metabolism",94,22,9,0.2247,0.0625,0.07395
+"Xenobiotics metabolism",110,16,10,0.2507,0.05882,0.07694
+"Purine metabolism",80,13,5,0.3774,0.05769,0.1051
+"Glycolysis and Gluconeogenesis",49,5,4,0.2141,0.1042,0.1071
+"Alanine and Aspartate Metabolism",30,5,2,0.3074,0.07317,0.1078
+"Phytanic acid peroxisomal oxidation",34,2,1,0.3951,0.05769,0.109
+"Vitamin B1 (thiamin) metabolism",20,2,1,0.3951,0.05769,0.109
+"Ubiquinone Biosynthesis",10,4,3,0.2507,0.09804,0.1157
+"De novo fatty acid biosynthesis",106,1,1,0.2218,0.1132,0.1176
+"Di-unsaturated fatty acid beta-oxidation",26,1,1,0.2218,0.1132,0.1176
+"Fatty acid activation",74,1,1,0.2218,0.1132,0.1176
+"Mono-unsaturated fatty acid beta-oxidation",19,1,1,0.2218,0.1132,0.1176
+"Omega-3 fatty acid metabolism",39,1,1,0.2218,0.1132,0.1176
+"Omega-6 fatty acid metabolism",55,1,1,0.2218,0.1132,0.1176
+"Selenoamino acid metabolism",35,1,1,0.2218,0.1132,0.1176
+"Vitamin H (biotin) metabolism",5,1,1,0.2218,0.1132,0.1176
+"TCA cycle",31,6,1,0.8312,0.03774,0.14
+"Prostaglandin formation from arachidonate",78,12,2,0.5618,0.05882,0.1457
+"Vitamin B6 (pyridoxine) metabolism",11,2,1,0.7178,0.04918,0.1533
+"Glyoxylate and Dicarboxylate Metabolism",12,1,1,0.2218,0.1633,0.1564
+"CoA Catabolism",7,3,2,0.2141,0.1875,0.1692
+"Vitamin E metabolism",54,2,2,0.04852,0.86,0.1743
+"Leukotriene metabolism",92,10,1,0.8697,0.05882,0.2032
+"Methionine and cysteine metabolism",94,10,3,0.3194,0.1731,0.2154
+"Butanoate metabolism",34,6,2,0.3986,0.1458,0.2235
+"Pyrimidine metabolism",70,7,3,0.1849,0.3396,0.2366
+"Vitamin B5 - CoA biosynthesis from pantothenate",12,4,2,0.3074,0.2439,0.2692
+"Alkaloid biosynthesis II",10,3,1,0.5303,0.1765,0.3153
+"Valine, leucine and isoleucine degradation",65,4,1,0.6357,0.1667,0.3438
+"Propanoate metabolism",31,3,1,0.3951,0.3077,0.3777
+"Keratan sulfate degradation",68,2,1,0.5303,0.2353,0.3845
+"N-Glycan Degradation",16,3,2,0.5303,0.2353,0.3845
+"Biopterin metabolism",22,1,1,0.3951,0.3269,0.3935
+"Drug metabolism - cytochrome P450",53,9,2,0.631,0.22,0.413
+"Aspartate and asparagine metabolism",114,8,1,0.8312,0.1837,0.4396
+"Histidine metabolism",33,7,2,0.484,0.3265,0.4496
+"Glycosphingolipid biosynthesis - ganglioseries",62,2,2,0.3951,0.4231,0.4662
+"Glycosphingolipid biosynthesis - globoseries",16,1,1,0.3951,0.4231,0.4662
+"N-Glycan biosynthesis",48,2,2,0.3951,0.4231,0.4662
+"Starch and Sucrose Metabolism",33,3,3,0.3951,0.4231,0.4662
+"Vitamin A (retinol) metabolism",67,3,1,0.5303,0.3333,0.483
+"Hexose phosphorylation",20,6,5,0.2141,0.8333,0.4859
+"Sialic acid metabolism",107,8,6,0.3986,0.5,0.5207
+"Arachidonic acid metabolism",95,14,1,0.7178,0.2927,0.5379
+"Galactose metabolism",41,9,8,0.5303,0.4118,0.5506
+"Chondroitin sulfate degradation",37,4,2,0.3074,0.7541,0.5707
+"Heparan sulfate degradation",34,4,2,0.3074,0.7541,0.5707
+"Lysine metabolism",52,11,1,0.9226,0.2549,0.5756
+"Vitamin B9 (folate) metabolism",33,4,1,0.5303,0.451,0.5813
+"Vitamin B3 (nicotinate and nicotinamide) metabolism",28,5,1,0.7178,0.3659,0.6138
+"Pentose and Glucuronate Interconversions",15,9,5,0.3986,0.6667,0.6179
+"Urea cycle/amino group metabolism",85,14,3,0.8372,0.32,0.6208
+"Carnitine shuttle",72,6,1,0.8312,0.3585,0.6588
+"Androgen and estrogen biosynthesis and metabolism",95,8,3,0.5618,0.5882,0.6964
+"Phosphatidylinositol phosphate metabolism",59,5,3,0.484,0.6939,0.7023
+"Arginine and Proline Metabolism",45,7,1,0.7816,0.4583,0.726
+"Glycerophospholipid metabolism",156,7,3,0.5618,0.6863,0.753
+"Glycosphingolipid metabolism",67,6,4,0.6357,0.7963,0.8508
+"Glycine, serine, alanine and threonine metabolism",88,11,1,0.9543,0.5455,0.8604
+"Beta-Alanine metabolism",20,4,1,0.6357,0.9167,0.8974
+"Ascorbate (Vitamin C) and Aldarate Metabolism",29,12,4,0.7315,0.9388,0.9448
+"Fructose and mannose metabolism",33,6,4,0.7178,1,0.9558
+"Bile acid biosynthesis",82,6,1,0.8995,0.8269,0.964
+"Porphyrin metabolism",43,7,1,0.8995,0.9,0.9806

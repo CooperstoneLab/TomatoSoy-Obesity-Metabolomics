@@ -1,0 +1,200 @@
+---
+title: "Notame QC correction"
+author: "Maria Sholola"
+date: "2023-06-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(notame)
+library(doParallel)
+library(janitor)
+library(rmarkdown)
+```
+
+# Create dfs
+
+## Feature abund df 
+
+```{r}
+# filtered and imputed data after notame clustering, transposed
+features_testforQCcorr <- t(imp_clust) %>%
+  as.data.frame() %>%
+  row_to_names(row_number = "find_header")
+
+# log2 transform
+log2_features_testforQCcorr <- features_testforQCcorr %>%
+  mutate_all(as.numeric) %>%
+  log2()
+
+# write csv to manually edit
+write.csv(log2_features_testforQCcorr,
+          "notame dfs/feaures_test.csv",
+          row.names = TRUE)
+```
+
+Import corrected df (edited so that mz_rt could rowname 1)
+```{r}
+features_forQCcorr <- read.csv("notame dfs/features_forQCcorr.csv",
+                                header = FALSE,
+                                row.names = 1)
+
+
+features_forQCcorr <- features_forQCcorr %>%
+  rownames_to_column(var = "mz_rt") %>%
+  row_to_names(row_number = 1)%>%
+  separate(col = mz_rt,
+           into = c("mz", "rt"),
+           sep = "_")
+
+write.csv(features_forQCcorr,
+          "notame dfs/features_forQCcorr_pt2.csv",
+          row.names = TRUE)
+
+```
+
+
+# Pheno df
+
+```{r}
+# separate sampleID and injection order
+pheno_data <- imp_clust[1] %>%
+  separate(col = sample_ID,
+           into = c("sample_ID", "injection_order"),
+           sep = "_HILICPOS_")
+
+# change pre-run QC injection number to correct number
+pheno_data[48, "injection_order"] <- 9
+
+# make inj order column num
+pheno_data <- pheno_data %>%
+  mutate_at("injection_order", as.numeric)
+
+t_pheno_data <- as.data.frame(t(pheno_data))
+
+write.csv(t_pheno_data,
+          "notame dfs/pheno_df.csv",
+          row.names = TRUE)
+```
+
+Combine pheno and feature dfs manually in excel to create metaboset df.
+
+# Import Metaboset
+
+```{r}
+#make sure when converting csv to xlsx that you save as a new file, don't just change the name of the file
+metaboset <- read_from_excel("notame dfs/metaboset.xlsx",
+                             split_by = c("column", "Ion mode"))
+
+```
+## Construct Metaboset
+
+```{r}
+#construct Metaboset
+modes <- construct_metabosets(exprs = metaboset$exprs,
+                              pheno_data = metaboset$pheno_data,
+                              feature_data = metaboset$feature_data, group_col = "Class")
+
+#extract each mode into a single object
+mode <- modes$HILIC_pos
+```
+
+
+# Boxplots before correction
+
+```{r}
+
+(qualityBPs_b4correction <- plot_sample_boxplots(mode, order_by = "Class", title = "Uncorrected feature abundance"))
+
+
+```
+
+# Boxplots after QC drift correction
+drift corrected takes up to 2 minutes
+```{r}
+mode <- flag_detection(mode, qc_limit = 0.75, group_limit = 0.8)
+
+
+corrected <- correct_drift(mode, log_transform = FALSE)
+```
+
+## did drift correction work?
+inspection also takes about 2 minutes to run; output is percent of the features that were drift corrected. The remaining "low-quality" percent represents features for which the DC did *not* improve the RSD and D-ratio of the original data.
+```{r}
+inspected <- inspect_dc(orig = mode, dc = corrected, check_quality = TRUE)
+```
+
+## boxplots, corrected
+```{r}
+
+(qualityBPS_driftcorrection <- plot_sample_boxplots(corrected, order_by = "Class", title = "Corrected feature abundance"))
+
+
+```
+
+# Compare quality BPs
+```{r, fig.height=10}
+(qualityBPs_compared <- ggarrange(qualityBPs_b4correction, qualityBPS_driftcorrection,
+                    ncol = 1, nrow = 2))
+```
+
+
+# Export new Metaboset to Excel spreadsheet
+```{r eval = FALSE}
+write_to_excel(corrected, "notame dfs/metaboset_corrected.xlsx")
+```
+
+# Import edited Metaboset
+
+```{r}
+metabdata_corrected <- read.csv(file = "notame dfs/metaboset_corrected_editedforR.csv",
+                                check.names = FALSE)
+```
+
+
+# Wrangle new metab data
+
+## Combine mz & rt back together
+```{r}
+metabdata_corrected_MZ_RT <- metabdata_corrected %>%
+  mutate(mass = round(metabdata_corrected$mass, digits = 4), # Decrease number of decimals for m/z & rt
+         rt = round(metabdata_corrected$rt, digits = 3),
+         .before=1,
+         .keep="unused") %>%
+  unite(mz_rt, c(mass, rt), remove=TRUE) # Combine m/z & rt with _ in between
+
+```
+
+## Transpose new df
+```{r}
+metabdata_corrected_t <- as.data.frame(t(metabdata_corrected_MZ_RT)) %>%
+  row_to_names(row_number = "find_header") %>% # make MZ_RT column names
+  rownames_to_column(var = "subj_period") # change rownames to column 1
+  
+```
+
+## Bind new data with metadata
+
+I want the new drift corrected (DC) df to look just like "imp_metabind_clust_log2" df
+
+```{r}
+# combine subject and period columns from imp_metabind_clust_log2 in order to mimic DC df
+subj_per_imp_metabind_clust_log2 <- imp_metabind_clust_log2 %>%
+  unite(subj_period, c(Subject, Period), remove = FALSE)
+
+# place new DC observations in
+DC_imp_metabind_clust_log2 <- full_join(subj_per_imp_metabind_clust_log2[,c(1:12)], metabdata_corrected_t, by = "subj_period")
+
+# take out old QC observations
+DC_imp_metabind_clust_log2 <- DC_imp_metabind_clust_log2 %>%
+  filter(subj_period != "QC_QC")
+
+# replace NAs in columns for QCs
+DC_imp_metabind_clust_log2[is.na(DC_imp_metabind_clust_log2)] <- "QC"
+```
+
