@@ -4,16 +4,7 @@ subtitle: "Urine, C18 (+) LCMS"
 author: "Maria Sholola"
 date: '6/5/2023 and so on'
 output: 
-  html_document:
-    highlight: kate
-    theme: yeti
-    toc: true
-    toc_float: true
-    toc_depth: 5
-    code_download: true
-    fig_width: 7
-editor_options: 
-  chunk_output_type: inline
+  github_document
 ---
 
 ```{r setup, include=FALSE} 
