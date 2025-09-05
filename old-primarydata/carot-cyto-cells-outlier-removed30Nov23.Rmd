@@ -1,0 +1,1653 @@
+---
+title: "Carotenoids and immune data"
+author: "Maria Sholola"
+date: "2023-11-30"
+output: 
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+    anchor_sections: true
+    code_download: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+
+# Introduction
+
+Statistical analysis of plasma carotenoids, plasma cytokines and immune cells from randomized cross-over USDA inflammation clinical trial. Subjects consumed both low lycopene tomato (yellow) and high lycopene tomato-soy juices (red) for 4 weeks each.
+
+
+```{r echo=FALSE, out.width="500px", fig.align='center', fig.cap="Crossover clinical trial design supplementing individuals with obesity 360 mL of a low carotenoid tomato juice or a high lycopene tomato-soy juice daily. Daily serving of low carotenoid tomato juice consisted of ~1.5mg lycopene/day while high lycopene tomato-soy juice intervention consisted of 54 mg lycopene/day in addition to 210 mg total soy isoflavones/day."}
+
+knitr::include_graphics("tomatosoy-clinical-trial-whitebg.png")
+```
+
+
+# Load libraries
+```{r, message=FALSE}
+library(tidyverse) # data wrangling
+library(readxl) # read in excel files
+library(janitor) # clean up names in dataset
+library(corrr) # finding correlations
+library(rstatix) # stats
+library(lme4) # mixed linear modeling
+library(knitr) # aesthetic table viewing
+library(lmerTest) # add pvalue column to lmer models
+library(purrr) # create functions
+library(broom.mixed) # generate tidy data frames for lmer results
+library(MuMIn) # lmer model testing using AICc
+library(kableExtra)
+library(ggthemes)
+library(ggtext)
+library(ggpubr)
+```
+
+
+# Read in data
+
+```{r}
+# load data
+meta_table <- read_excel("CompiledData_Results_Meta.xlsx",
+                         sheet = "metadata_corrected_withsequence")
+
+# clean up variable names 
+meta_table <- clean_names(meta_table)
+
+str(meta_table)
+```
+
+
+## Wrangle
+
+```{r}
+# convert variables that should be factors to factors
+meta_table <- meta_table %>%
+  mutate(across(.cols = c("patient_id", "period", 
+                          "intervention", "intervention_week", 
+                          "pre_post", "sex", "sequence"),
+                .fns = as.factor))
+
+
+# some stuff came in as characters but should be numeric
+meta_table <- meta_table %>%
+  mutate(across(.cols = c("il_2", "il_10", "il_13", "il_4"),
+                .fns = as.numeric))
+
+str(meta_table)
+```
+
+
+```{r}
+# changing factor levels for pre_post
+meta_table$pre_post <- factor(meta_table$pre_post,
+                              levels = c("pre", "post"))
+
+levels(meta_table$pre_post)  
+```
+
+
+```{r}
+# Calculate total_cis_lyc, total_lyc, and total_carotenoids
+meta_table <- meta_table %>%
+  rename(n5_cis_lyc = x5_cis_lyc) %>%
+  mutate(total_cis_lyc = other_cis_lyc + n5_cis_lyc,
+         total_lyc = all_trans_lyc + total_cis_lyc,
+         total_carotenoids = lutein + zeaxanthin + b_cryptoxanthin + 
+                             a_carotene + b_carotene + total_lyc) 
+```
+
+
+# Carotenoids
+
+## All-trans-lyc levels
+
+```{r}
+# line plots for each subject at each timepoint
+meta_table %>% 
+  ggplot(aes(x = intervention_week, y = all_trans_lyc, color = intervention)) +
+  geom_point() + 
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Baseline" = "gray", 
+                                           "Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id), scales = "free_y") + 
+  theme_bw() +
+  labs(x = "Intervention Week",
+       y = "All-trans-lycopene levels (nmol/L)",
+       title = "All-trans-lycopene levels in each patient before/after each intervention")
+```
+
+## Total cis-lyc levels
+```{r}
+# line plots for each subject at each timepoint
+meta_table %>% 
+  ggplot(aes(x = intervention_week, y = total_cis_lyc, color = intervention)) +
+  geom_point() + 
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Baseline" = "gray", 
+                                           "Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id)) +
+  theme_bw() +
+  labs(x = "Intervention Week",
+       y = "Total cis-lycopene levels (nmol/L)",
+       title = "Total cis-lycopene levels in each patient before/after each intervention")
+```
+
+## Total lyc levels
+
+### lineplots 
+
+```{r}
+# line plots for each subject at each timepoint
+meta_table %>% 
+  ggplot(aes(x = intervention_week, y = total_lyc, color = intervention)) +
+  geom_point() + 
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Baseline" = "gray", 
+                                           "Yellow" = "gold",
+                                           "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id), scales = "free_y") +
+  theme_bw() +
+  labs(x = "Intervention Week",
+       y = "Total lycopene levels (nmol/L)",
+       title = "Total lycopene levels in each patient before/after each intervention")
+```
+
+
+### Boxplots
+
+#### wrangling
+
+```{r}
+# create a more specific pre_post_intervention column
+meta_table_edited <- meta_table %>%
+  unite(col = "pre_post_intervention",
+        c("pre_post","intervention"),
+        sep = "_",
+        remove = FALSE)
+
+# make pre_post_intervention column factors
+meta_table_edited$pre_post_intervention <- as.factor(meta_table_edited$pre_post_intervention)
+
+# relevel factor columns
+meta_table_edited$pre_post_intervention <- factor(meta_table_edited$pre_post_intervention, levels = c("pre_Yellow", "post_Yellow", "pre_Red", "post_Red"))
+
+meta_table_edited$intervention <- factor(meta_table_edited$intervention,
+                                         levels = c("Yellow", "Red"))
+
+```
+
+
+```{r}
+# make legend title
+legendtitle_ppintervention <- "Timepoint"
+
+
+# labels
+labs_ppintervention <- c("pre control",
+                         "post control",
+                         "pre Tomato-Soy",
+                         "post Tomato-Soy")
+```
+
+
+#### figure
+```{r}
+meta_table_edited %>% 
+  filter(intervention != "Baseline") %>%
+  ggplot(aes(x = intervention, y = total_lyc, fill = pre_post_intervention)) +
+  geom_boxplot(outlier.shape = NA) + 
+  scale_fill_manual(legendtitle_ppintervention,
+                    values = c("pre_Red" = "#FF9966",
+                               "post_Red" = "#FF3300",
+                               "pre_Yellow" = "#FFFF99",
+                               "post_Yellow" = "yellow"),
+                    labels = labs_ppintervention) +
+  theme_clean() +
+  labs(x = "",
+       y = "Total lycopene levels (nmol/L)",
+       title = "Total lycopene levels before/after juice interventions")
+```
+
+
+```{r, fig.width=12}
+meta_table_edited %>% 
+  filter(intervention != "Baseline") %>%
+  ggplot(aes(x = pre_post_intervention, y = total_lyc, fill = intervention)) +
+  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1")) +
+  scale_x_discrete(labels = labs_ppintervention) +
+  theme_clean(base_size = 22, base_family = "sans") +
+  labs(x = "",
+       y = "Overall plasma lycopene conc. (nmol/L)",
+       title = "Total plasma lycopene levels",
+       subtitle = "Before and after juice interventions")
+```
+
+
+
+```{r, fig.width=12}
+# publish-ready plot
+library(ggpubr)
+
+(total_lyc_levels <- meta_table_edited %>% 
+    filter(intervention != "Baseline") %>%
+  ggpaired(x = "pre_post", y = "total_lyc", fill = "intervention", line.color = "gray", line.size = 1, facet.by = "intervention", short.panel.labs = FALSE, panel.labs = list(intervention = c("", ""))) +
+  scale_fill_manual(values = c("Red" = "tomato1",
+                               "Yellow" = "yellow1"),
+                    labels = c("Control", "Tomato-Soy"),
+                    name = "Intervention") +
+  geom_line(aes(group = patient_id), colour = "gray", linewidth = 0.15) +
+  theme_clean(base_size = 18, base_family = "sans") +
+  labs(x = "",
+       y = "nmol/L plasma",
+       title = "Concentration of Lycopene",
+       subtitle = ""))
+```
+
+#### export
+```{r, eval=FALSE}
+ggsave(filename = "/Users/mariasholola/Documents/GitHub/USDA-Inflammation-Metabolomics/Plots/total-lyc-red-and-yellow-boxplots.svg", plot = total_lyc_levels, width = 12)
+```
+
+
+### Descriptive stats
+
+#### wrangle
+```{r}
+# convert meta_table_edited to long format for lycopene
+meta_table_lyc_long <- meta_table_edited %>%
+  pivot_longer(cols = total_lyc,
+               names_to = "total_lycopene",
+               values_to = "nmol_per_L")
+```
+
+
+#### Avg/std dev
+
+##### tomsoy
+```{r}
+meta_table_lyc_long %>%
+  filter(intervention == "Red") %>%
+  group_by(pre_post) %>%
+  summarize(mean = mean(nmol_per_L),
+            stdev = sd(nmol_per_L))
+```
+
+##### yellow
+```{r}
+meta_table_lyc_long %>%
+  filter(intervention == "Yellow") %>%
+  group_by(pre_post) %>%
+  summarize(mean = mean(nmol_per_L),
+            stdev = sd(nmol_per_L))
+```
+
+#### Mean fold changes
+```{r}
+lyc_long_subset <- meta_table_lyc_long %>%
+  select(patient_id, nmol_per_L, pre_post_intervention) %>%
+  pivot_wider(names_from = pre_post_intervention,
+              values_from = nmol_per_L) %>%
+  mutate(red_FC = post_Red/pre_Red,
+         yellow_FC = post_Yellow/pre_Yellow)
+
+lyc_long_subset %>%
+  summarize(mean_red_FC = mean(red_FC),
+            mean_yellow_FC = mean(yellow_FC))
+```
+
+
+
+#### Normality checks
+
+Plot histogram
+```{r}
+gghistogram(meta_table_lyc_long$nmol_per_L, bins = 40)
+```
+
+
+
+
+Shapiro's normality test
+```{r}
+# shapiro normality test for total lycopene 
+
+meta_table_lyc_long %>%
+  group_by(intervention) %>%
+  shapiro_test(vars = "nmol_per_L")
+```
+P val for shapiro test turned out to < 0.05 for both interventions, suggesting data here is not normal. Let's log transform before running paired t-tests.
+
+#### Log transform
+```{r}
+meta_table_lyc_log2_long <- meta_table_lyc_long %>%
+  mutate(log2_nmol_per_L = log2(nmol_per_L))
+```
+
+Without transforming, here's a paired t-test
+```{r}
+compare_means(nmol_per_L ~ pre_post, meta_table_lyc_log2_long, method = "t.test", paired = TRUE, group.by = "intervention")
+```
+
+##### normality check
+
+Plot histogram
+```{r}
+gghistogram(meta_table_lyc_log2_long$log2_nmol_per_L, bins = 40)
+```
+
+
+Shapiro's normality test
+```{r}
+# shapiro normality test for total lycopene 
+meta_table_lyc_log2_long %>%
+  group_by(intervention) %>%
+  shapiro_test(vars = "log2_nmol_per_L")
+```
+
+##### paired t test
+
+```{r}
+compare_means(log2_nmol_per_L ~ pre_post, meta_table_lyc_log2_long, method = "t.test", paired = TRUE, group.by = "intervention")
+```
+
+Total lycopene levels are significantly increasing only after post-Red intervention
+
+# Cytokines
+
+Let's first remove 6112 and see how this affects the data 
+
+```{r}
+subj6112_yellow <- meta_table_edited %>%
+  filter(patient_id == 6112) %>%
+  filter(intervention == "Yellow")
+
+meta_table_edited_rm_outlier <- anti_join(meta_table_lyc_long, 
+                                            subj6112_yellow)
+  
+```
+
+```{r}
+# convert cytokines from wide to long
+cytokines_long <- meta_table_edited_rm_outlier[-c(26:82)] %>%
+  pivot_longer(cols = if_ng:il_4,
+               names_to = "cytokines",
+               values_to = "cyto_conc_pg_ml")
+```
+
+
+
+```{r}
+#cytokines_long_nona <- na.omit(cytokines_long)
+```
+*note* 11/30/23: I took this part out since NAs don't matter for lmm
+
+
+## Mixed linear modeling
+
+After testing several models, the best model turned out to have pre_post as a fixed variable and patient_id as random effect. Carotenoids added no statistically significant effect to the model, suggesting that carotenoids are not contributing to cytokine levels. 
+Set REML = FALSE when comparing models.
+
+
+### Sequence effect test
+
+```{r}
+# turn off sci notation
+options(scipen = 999)
+
+# sequence effect test lmer model function
+cyto_seq_function <- function(cytokines_long) {
+  lmer(cyto_conc_pg_ml ~ sequence + (1|patient_id), 
+       data = cytokines_long, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_seq_models <- map(split(cytokines_long,
+                         cytokines_long$cytokines),
+                   cyto_seq_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_seq_results <- map_df(cyto_seq_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_seq_results_coefonly <- cyto_seq_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+```
+
+
+```{r}
+# results 
+kable(cyto_seq_results_coefonly, format = "markdown", digits = 3)
+```
+
+
+Are there any significant cytokines?
+```{r}
+# extract statistically significant cytokines 
+cytokines_seq_psig <- cyto_seq_results_coefonly %>%
+  filter(cyto_seq_results_coefonly$p.value < 0.05)
+
+print(cytokines_seq_psig$cytokines)
+```
+
+
+* No statistically significant cytokines, suggesting there are no sequence effects
+
+### Intervention comparison
+
+```{r}
+# filter data for post-intervention only
+cytokines_post_long <- cytokines_long %>%
+  filter(intervention != "Baseline") %>%
+  filter(pre_post == "post")
+```
+
+
+```{r}
+# treatment effect test lmer model function
+cyto_trt_function <- function(cytokines_post_long) {
+  lmer(cyto_conc_pg_ml ~ intervention + (1|patient_id), 
+       data = cytokines_post_long, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_trt_models <- map(split(cytokines_post_long,
+                         cytokines_post_long$cytokines),
+                   cyto_trt_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_trt_results <- map_df(cyto_trt_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_trt_coefonly <- cyto_trt_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+```
+
+Results
+```{r}
+kable(cyto_trt_coefonly, format = "markdown", digits = 3)
+```
+
+
+```{r}
+# extract statistically significant cytokines 
+cytokines_trt_psig <- cyto_trt_coefonly %>%
+  filter(cyto_trt_coefonly$p.value < 0.05)
+
+
+print(cytokines_trt_psig$cytokines)
+```
+
+
+* There are no cytokines with significantly different levels when comparing post-red vs. post-yellow treatment
+
+### Yellow treatment effects
+
+```{r}
+# subset data into yellow results
+cytokines_Y <- cytokines_long %>%
+  filter(intervention == "Yellow")
+```
+
+
+```{r}
+# treatment effect test lmer model function
+cyto_trtY_function <- function(cytokines_Y) {
+  lmer(cyto_conc_pg_ml ~ pre_post + (1|patient_id), 
+       data = cytokines_Y, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_trtY_models <- map(split(cytokines_Y,
+                         cytokines_Y$cytokines),
+                   cyto_trtY_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_trtY_results <- map_df(cyto_trtY_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_trtY_coefonly <- cyto_trtY_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+```
+
+Results
+```{r}
+kable(cyto_trtY_coefonly, format = "markdown", digits = 3)
+```
+
+Significant cytokines
+```{r}
+# extract statistically significant cytokines 
+cytokines_trtY_psig <- cyto_trtY_coefonly %>%
+  filter(cyto_trtY_coefonly$p.value < 0.05)
+
+
+print(cytokines_trtY_psig$cytokines)
+```
+
+
+* No significant cytokines within yellow treatment
+
+### Red treatment effects
+
+```{r}
+# subset data into yellow results
+cytokines_R <- cytokines_long %>%
+  filter(intervention == "Red")
+```
+
+
+```{r}
+# treatment effect test lmer model function
+cyto_trtR_function <- function(cytokines_R) {
+  lmer(cyto_conc_pg_ml ~ pre_post + (1|patient_id), 
+       data = cytokines_R, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_trtR_models <- map(split(cytokines_R,
+                         cytokines_R$cytokines),
+                   cyto_trtR_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_trtR_results <- map_df(cyto_trtR_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_trtR_coefonly <- cyto_trtR_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+```
+
+Results
+```{r}
+kable(cyto_trtR_coefonly, format = "markdown", digits = 3) %>%
+  row_spec(11, bold = TRUE)
+```
+
+Significant cytokines
+```{r}
+# extract statistically significant cytokines 
+cytokines_trtR_psig <- cyto_trtR_coefonly %>%
+  filter(cyto_trtR_coefonly$p.value < 0.05)
+
+print(cytokines_trtR_psig$cytokines)
+```
+
+* IL-5 is the only significantly different cytokine within red intervention. Same p value from t-test (= 0.0484)
+* IL-5 on average goes down by ~1.8 pg/mL from pre to post in red intervention
+
+#### IL-5 plots
+
+##### lineplots
+```{r}
+meta_table %>%
+  filter(intervention == "Red") %>%
+  ggplot(aes(x = intervention_week, y = il_5, 
+             color = intervention, group = intervention)) +
+  geom_line() +
+  theme_classic() +
+  labs(x = "Week",
+       y = "IL-5 levels (pg/mL)",
+       title = "IL-5 changes by subject before and after red intervention",
+       color = "Patient ID") +
+  facet_wrap(~patient_id,
+             scales = "free_y") +
+  scale_color_manual(values = c("Red" = "tomato1"))
+```
+
+```{r}
+meta_table %>% 
+  filter(intervention == "Red") %>%
+  ggplot(aes(x = pre_post, y = il_5, color = patient_id)) +
+  geom_line(aes(group = patient_id)) +
+  labs(x = "",
+       y = "IL-5 conc (pg/mL)",
+       title = "IL-5 levels in each patient before and after red intervention") +
+  theme_classic()
+```
+
+
+```{r}
+meta_table %>% 
+  filter(intervention != "Baseline") %>%
+  ggplot(aes(x = pre_post, y = il_5, color = intervention)) +
+  geom_line(aes(group = intervention)) +
+  scale_color_manual(values = c("Yellow" = "gold",
+                                "Red" = "tomato1")) +
+  facet_wrap(vars(patient_id), scales = "free_y") + 
+  theme_classic() +
+  labs(x = "",
+       y = "IL-5 conc (pg/mL)",
+       title = "IL-5 levels in each patient pre- and post- red and yellow intervention")
+```
+
+##### boxplots
+```{r}
+
+cytokines_long %>%
+  filter(intervention == "Red") %>%
+  filter(cytokines == "il_5") %>%
+  ggplot(aes(x = pre_post, y = cyto_conc_pg_ml, fill = intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter() +
+  scale_fill_manual(values = c("Red" = "tomato1")) +
+  labs(x = "",
+       y = "IL- 5 levels (pg/mL)",
+       title = "IL-5 levels before and after red intervention") +
+  theme_bw()
+
+```
+
+* IL-5 on average goes down by ~1.8 pg/mL from pre to post in red intervention. This is a significant decrease according to the mixed linear model.
+
+# Log-transformed cytokines
+
+I know the data isn't normally distributed. Mixed linear models do not assume normality of the dependant variable, however the residuals should be normally distributed. 
+
+## resid normality checks
+I need to figure out how to make a function that extracts makes a QQplot for each model. But since IL-5 was significant, let's look at how the residuals look for this cytokine (for every comparison) before log transforming
+```{r}
+#qqplot_fx <- function(cytokine){
+  #qqnorm(resid(cyto_seq_models$cytokine))
+  #qqline(resid(cyto_seq_models$cytokine))
+#}
+
+#qqplot_fx("il_5")
+
+#cyto_seq_results$
+```
+
+### seq
+```{r}
+qqnorm(resid(cyto_seq_models$il_5))
+qqline(resid(cyto_seq_models$il_5))
+```
+
+That doesn't look good.
+
+### intervention
+
+```{r}
+qqnorm(resid(cyto_trt_models$il_5))
+qqline(resid(cyto_trt_models$il_5))
+```
+
+doesn't look as bad as sequence
+
+### red
+
+```{r}
+qqnorm(resid(cyto_trtR_models$il_5))
+qqline(resid(cyto_trtR_models$il_5))
+```
+
+doesn't look that bad for Red
+
+### yellow
+
+```{r}
+qqnorm(resid(cyto_trtY_models$il_5))
+qqline(resid(cyto_trtY_models$il_5))
+```
+
+
+I will log transform the data and perform mixed linear modeling and paired t-tests for every comparison to see how the data compares. 
+
+Wrangle
+```{r}
+cytokines_log2conc_long <- cytokines_long %>%
+  mutate(log2_cyto_conc_pg_ml = log2(cyto_conc_pg_ml))
+```
+
+## Mixed linear modeling
+
+### Sequence effect test
+
+We want to make sure there are no seq effects
+
+
+```{r}
+# sequence effect test lmer model function
+cyto_log2_seq_function <- function(cytokines_log2conc_long) {
+  lmer(log2_cyto_conc_pg_ml ~ sequence + (1|patient_id), 
+       data = cytokines_log2conc_long, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_log2_seq_models <- map(split(cytokines_log2conc_long,
+                         cytokines_log2conc_long$cytokines),
+                   cyto_log2_seq_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_log2_seq_results <- map_df(cyto_log2_seq_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_log2_seq_results_coefonly <- cyto_log2_seq_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+```
+
+#### Resid check
+
+```{r}
+# before log transform
+qqnorm(resid(cyto_seq_models$il_5))
+qqline(resid(cyto_seq_models$il_5))
+```
+
+
+```{r}
+# after log transform
+qqnorm(resid(cyto_log2_seq_models$il_5))
+qqline(resid(cyto_log2_seq_models$il_5))
+```
+This looks better after log transform.
+
+#### Results
+```{r}
+# results 
+kable(cyto_log2_seq_results_coefonly, format = "markdown", digits = 3)
+```
+
+
+Are there any significant cytokines?
+```{r}
+# extract statistically significant cytokines 
+cytokines_log2_seq_psig <- cyto_log2_seq_results_coefonly %>%
+  filter(cyto_log2_seq_results_coefonly$p.value < 0.05)
+
+print(cytokines_log2_seq_psig$cytokines)
+```
+
+* No statistically significant cytokines, suggesting there are no sequence effects
+
+
+
+
+### Intervention comparison
+
+Comparing post-Red vs. post-Yellow
+
+```{r}
+# filter data for post-intervention only
+cytokines_log2conc_post_long <- cytokines_log2conc_long %>%
+  filter(intervention != "Baseline") %>%
+  filter(pre_post == "post")
+```
+
+
+```{r}
+# treatment effect test lmer model function
+cyto_log2_trt_function <- function(cytokines_log2conc_post_long) {
+  lmer(log2_cyto_conc_pg_ml ~ intervention + (1|patient_id), 
+       data = cytokines_log2conc_post_long, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_log2_trt_models <- map(split(cytokines_log2conc_post_long,
+                         cytokines_log2conc_post_long$cytokines),
+                   cyto_log2_trt_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_log2_trt_results <- map_df(cyto_log2_trt_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_log2_trt_coefonly <- cyto_log2_trt_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+```
+
+
+##### Resid check
+
+```{r}
+# before log transform
+qqnorm(resid(cyto_trt_models$il_5))
+qqline(resid(cyto_trt_models$il_5))
+```
+
+```{r}
+# log transformed
+qqnorm(resid(cyto_log2_trt_models$il_5))
+qqline(resid(cyto_log2_trt_models$il_5))
+```
+
+Don't know if this helps for intervention comparison
+
+##### Results
+```{r}
+kable(cyto_log2_trt_coefonly, format = "markdown", digits = 3)
+```
+
+
+```{r}
+# extract statistically significant cytokines 
+cytokines_log2_trt_psig <- cyto_log2_trt_coefonly %>%
+  filter(cyto_log2_trt_coefonly$p.value < 0.05)
+
+
+print(cytokines_log2_trt_psig$cytokines)
+```
+
+
+* There are no cytokines with significantly different levels when comparing post-red vs. post-yellow treatment
+
+### Yellow treatment effects
+
+```{r}
+# subset data into yellow results
+cytokines_Y_log2 <- cytokines_log2conc_long %>%
+  filter(intervention == "Yellow")
+```
+
+
+```{r}
+# treatment effect test lmer model function
+cyto_trtY_log2_function <- function(cytokines_Y_log2) {
+  lmer(log2_cyto_conc_pg_ml ~ pre_post + (1|patient_id), 
+       data = cytokines_Y_log2, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_trtY_log2_models <- map(split(cytokines_Y_log2,
+                         cytokines_Y_log2$cytokines),
+                   cyto_trtY_log2_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_trtY_log2_results <- map_df(cyto_trtY_log2_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_trtY_log2_coefonly <- cyto_trtY_log2_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+```
+
+##### Resid check
+
+```{r}
+# before log transform 
+qqnorm(resid(cyto_trtY_models$il_5))
+qqline(resid(cyto_trtY_models$il_5))
+```
+
+```{r}
+# after log transform
+qqnorm(resid(cyto_trtY_log2_models$il_5))
+qqline(resid(cyto_trtY_log2_models$il_5))
+```
+
+##### Results
+```{r}
+kable(cyto_trtY_log2_coefonly, format = "markdown", digits = 3)
+```
+
+Significant cytokines
+```{r}
+# extract statistically significant cytokines 
+cytokines_trtY_log2_psig <- cyto_trtY_log2_coefonly %>%
+  filter(cyto_trtY_log2_coefonly$p.value < 0.05)
+
+
+print(cytokines_trtY_log2_psig$cytokines)
+```
+
+
+* No significant cytokines within yellow treatment
+
+### Red treatment effects
+
+```{r}
+# subset data into yellow results
+cytokines_R_log2 <- cytokines_log2conc_long %>%
+  filter(intervention == "Red")
+```
+
+
+```{r}
+# treatment effect test lmer model function
+cyto_trtR_log2_function <- function(cytokines_R_log2) {
+  lmer(log2_cyto_conc_pg_ml ~ pre_post + (1|patient_id), 
+       data = cytokines_R_log2, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cyto_trtR_log2_models <- map(split(cytokines_R_log2,
+                         cytokines_R_log2$cytokines),
+                   cyto_trtR_log2_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cyto_trtR_log2_results <- map_df(cyto_trtR_log2_models,
+                          tidy,
+                          .id = "cytokines")
+
+# extract fixed coefficients for sequence only
+cyto_trtR_log2coefonly <- cyto_trtR_log2_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+```
+
+
+##### Resid check
+
+```{r}
+# before log transform
+qqnorm(resid(cyto_trtR_models$il_5))
+qqline(resid(cyto_trtR_models$il_5))
+```
+
+```{r}
+# log transformed
+qqnorm(resid(cyto_trtR_log2_models$il_5))
+qqline(resid(cyto_trtR_log2_models$il_5))
+```
+
+##### Results
+```{r}
+kable(cyto_trtR_log2coefonly, format = "markdown", digits = 3) 
+```
+
+
+
+Significant cytokines
+```{r}
+# extract statistically significant cytokines 
+cytokines_trtR_log2_psig <- cyto_trtR_log2coefonly %>%
+  filter(cyto_trtR_log2coefonly$p.value < 0.05)
+
+print(cytokines_trtR_log2_psig$cytokines)
+```
+
+*note* 11/30/23: Log transforming changes results a bit. IL-5 is no longer significant (pval = 0.053), and now GM-CSF and IL-12p70 are significant. I've done nonparametric stats on untransformed data, these 2 cytokines along with IL-5 were significant. The question is, should I be doing log transformation for the mixed linear models? Q-Q plot looks better for IL-5 after log transforming...
+
+## Paired t tests
+
+### Red
+
+```{r}
+compare_means(log2_cyto_conc_pg_ml ~ pre_post, cytokines_R_log2, method = "t.test", paired = TRUE, group.by = "cytokines")
+```
+
+We get the same result for paired t-test on log transformed data
+
+# Immune Cells
+
+## Mixed linear modeling
+
+*note* 11/30/23: if there are any NAs, should I assume below LOD? Or were values not recorded?
+
+```{r}
+# convert immune cell data from wide to long
+cells_long <- meta_table %>%
+  select(1:24, starts_with("x")) %>%
+  pivot_longer(cols = x01_cd45_cd66b_lymph_dc_mono:x41_cd66b_mdsc_grans,
+               names_to = "cell_type",
+               values_to = "cell_value")
+
+```
+
+
+### Sequence effect test
+```{r}
+# lmer model function
+cells_seq_function <- function(cells_long) {
+  lmer(cell_value ~ sequence + (1|patient_id), data = cells_long, REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cells_seq_models <- map(split(cells_long,
+                              cells_long$cell_type),
+                   cells_seq_function)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+cells_seq_results <- map_df(cells_seq_models,
+                            tidy,
+                            .id = "cell_type")
+
+cells_seq_results_coef <- cells_seq_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+
+
+```
+
+Results
+```{r}
+kable(cells_seq_results_coef, format = "markdown", digits = 3)
+```
+
+```{r}
+# extract statistically significant cytokines 
+cells_seq_psig <- cells_seq_results_coef %>%
+  filter(cells_seq_results_coef$p.value < 0.05)
+
+print(cells_seq_psig$cell_type)
+```
+
+*No sequence effects
+
+### Intervention comparison
+
+```{r}
+# filter data for post-intervention only
+cells_post_long <- cells_long %>%
+  filter(intervention != "Baseline") %>%
+  filter(pre_post == "post")
+
+str(cells_post_long)
+```
+
+```{r}
+# remove x41_cd66b_mdsc_grans because it's causing an error
+cells_post_long_edited <- cells_post_long %>%
+  filter(cell_type != "x41_cd66b_mdsc_grans")
+```
+
+
+
+```{r}
+# treatment effect test lmer model function
+cells_trt_function <- function(cells_post_long_edited) {
+  lmer(cell_value ~ intervention + (1|patient_id), 
+       data = cells_post_long_edited, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cell, then apply funtion to each subset
+cells_trt_models <- map(split(cells_post_long_edited,
+                              cells_post_long_edited$cell_type),
+                        cells_trt_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cells_trt_results <- map_df(cells_trt_models,
+                           tidy,
+                          .id = "cell_type")
+
+# extract fixed coefficients for sequence only
+cells_trt_coefonly <- cells_trt_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+kable(cells_trt_coefonly, format = "markdown", digits = 4)
+
+# extract statistically significant cell type 
+cells_trt_psig <- cells_trt_coefonly %>%
+  filter(cells_trt_coefonly$p.value < 0.05)
+
+
+print(cells_trt_psig$cell_type)
+
+```
+
+*3 significant cell types
+
+#### Plots
+
+```{r}
+sigcells_trt <- cells_trt_psig$cell_type
+```
+
+##### lineplots
+```{r}
+cells_post_long_edited %>% 
+  filter(cell_type %in% sigcells_trt) %>%
+  ggplot(aes(x = intervention, y = cell_value, color = patient_id)) +
+  geom_line(aes(group = patient_id)) +
+  labs(x = "",
+       y = "",
+       title = "") +
+  theme_classic() +
+  facet_wrap(~ cell_type, scales = "free_y")
+```
+
+
+
+##### boxplots
+```{r}
+cells_post_long_edited %>%
+  filter(cell_type %in% sigcells_trt) %>%
+  ggplot(aes(x = intervention, y = cell_value, fill = intervention)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("Yellow" = "gold",
+                               "Red" = "tomato1")) +
+  geom_jitter() +
+  labs(x = "Intervention", 
+       y = "Cell value",
+       title = "Significantly different cell types: post- yellow vs. post- red interventions") +
+  facet_wrap(~ cell_type, ncol = 3, nrow = 1, scales = "free_y") +
+  theme_bw()
+```
+
+
+* x38_CD16 NK cells are **significantly higher** in post- yellow compared to post-red
+
+* x37_cd56_cd161_cd123_nk_cells and x40_cd14_mdsc_mono **significantly lower** post-yellow intervention compared to post-red
+
+
+### Yellow juice treatment
+
+```{r}
+# subset data into yellow results
+cells_Y_long <- cells_long %>%
+  filter(intervention == "Yellow")
+```
+
+```{r}
+# remove x41_cd66b_mdsc_grans because it has too many NAs
+cells_Y_long_edited <- cells_Y_long %>%
+  filter(cell_type != "x41_cd66b_mdsc_grans")
+```
+
+
+```{r}
+# treatment effect test lmer model function
+cells_trtY_function <- function(cells_Y_long_edited) {
+  lmer(cell_value ~ pre_post + (1|patient_id), 
+       data = cells_Y_long_edited, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cells_trtY_models <- map(split(cells_Y_long_edited,
+                              cells_Y_long_edited$cell_type),
+                        cells_trtY_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cells_trtY_results <- map_df(cells_trtY_models,
+                            tidy,
+                            .id = "cell_type")
+
+# extract fixed coefficients for sequence only
+cells_trtY_coefonly <- cells_trtY_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+```
+
+Results
+```{r}
+# extract statistically significant cytokines 
+cells_trtY_psig <- cells_trtY_coefonly %>%
+  filter(cells_trtY_coefonly$p.value < 0.05)
+
+print(cells_trtY_psig$cell_type)
+```
+
+#### Plots
+
+```{r}
+sigcells_Y <- cells_trtY_psig$cell_type
+```
+
+##### lineplots
+```{r}
+cells_Y_long_edited %>% 
+  filter(cell_type %in% sigcells_Y) %>%
+  ggplot(aes(x = pre_post, y = cell_value, color = patient_id)) +
+  geom_line(aes(group = patient_id)) +
+  labs(x = "",
+       y = "",
+       title = "") +
+  theme_classic() +
+  facet_wrap(~ cell_type, scales = "free_y")
+```
+
+
+
+##### boxplots
+```{r}
+cells_Y_long_edited %>% 
+  filter(cell_type %in% sigcells_Y) %>%
+  ggplot(aes(x = pre_post, y = cell_value, fill = pre_post)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("pre" = "gray",
+                               "post" = "gold")) +
+  geom_jitter() +
+  labs(x = "Pre vs post", 
+       y = "Cell value",
+       title = "Significantly different cell types: pre vs post yellow") +
+  facet_wrap(~ cell_type, ncol = 3, nrow = 2, scales = "free_y") +
+  theme_bw()
+```
+
+*5 significant cell types
+
+### Red juice treatment
+
+```{r}
+# subset data into red results
+cells_R_long <- cells_long %>%
+  filter(intervention == "Red")
+```
+
+```{r}
+# remove x41_cd66b_mdsc_grans because it has too many NAs
+cells_R_long_edited <- cells_R_long %>%
+  filter(cell_type != "x41_cd66b_mdsc_grans")
+```
+
+```{r}
+# treatment effect test lmer model function
+cells_trtR_function <- function(cells_R_long_edited) {
+  lmer(cell_value ~ pre_post + (1|patient_id), 
+       data = cells_R_long_edited, 
+       REML = TRUE)
+}
+
+# break data up into subsets based on cell, then apply funtion to each subset
+cells_trtR_models <- map(split(cells_R_long_edited,
+                               cells_R_long_edited$cell_type),
+                         cells_trtR_function)
+
+# create single data frame of results by applying the lmer function to each element in list. apply tidy from broom.mixed package to clean up results
+cells_trtR_results <- map_df(cells_trtR_models,
+                             tidy,
+                             .id = "cell_type")
+
+# extract fixed coefficients for sequence only
+cells_trtR_coefonly <- cells_trtR_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+```
+
+Results
+
+```{r}
+kable(cells_trtR_coefonly, format = "markdown", digits = 3)
+
+# extract statistically significant cells 
+cells_trtR_psig <- cells_trtR_coefonly %>%
+  filter(cells_trtR_coefonly$p.value < 0.05)
+
+
+print(cells_trtR_psig$cell_type)
+```
+
+
+#### Plots
+
+```{r}
+sigcells_R <- cells_trtR_psig$cell_type
+```
+
+##### lineplots
+```{r}
+cells_R_long_edited %>% 
+  filter(cell_type %in% sigcells_R) %>%
+  ggplot(aes(x = pre_post, y = cell_value, color = patient_id)) +
+  geom_line(aes(group = patient_id)) +
+  labs(x = "",
+       y = "",
+       title = "") +
+  theme_classic() +
+  facet_wrap(~ cell_type, scales = "free_y")
+```
+
+
+##### boxplots
+```{r}
+cells_R_long_edited %>% 
+  filter(cell_type %in% sigcells_R) %>%
+  ggplot(aes(x = pre_post, y = cell_value, fill = pre_post)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_fill_manual(values = c("pre" = "gray",
+                               "post" = "tomato")) +
+  geom_jitter() +
+  labs(x = "Pre vs post", 
+       y = "Cell value",
+       title = "Significantly different cell types: pre vs post Red") +
+  facet_wrap(~ cell_type, ncol = 3, nrow = 2, scales = "free_y") +
+  theme_bw()
+```
+
+
+Naive B-cell pop (#26) significantly increase post-Red intervention, and also increase post-Yellow intervention. This could suggest there is a tomato effect. 
+
+# Log transformed immune cells
+
+## resid normality checks
+I need to figure out how to make a function that extracts makes a QQplot for each model. But since IL-5 was significant, let's look at how the residuals look for this cytokine (for every comparison) before log transforming
+```{r}
+#qqplot_fx <- function(cytokine){
+  #qqnorm(resid(cyto_seq_models$cytokine))
+  #qqline(resid(cyto_seq_models$cytokine))
+#}
+
+#qqplot_fx("il_5")
+
+#cyto_seq_results$
+```
+
+### seq
+```{r}
+qqnorm(resid(cells_seq_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_seq_models$x25_cd19_cd3_b_cells))
+```
+
+Doesn't look bad
+
+### intervention
+
+```{r}
+qqnorm(resid(cells_trt_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_trt_models$x25_cd19_cd3_b_cells))
+```
+
+doesn't look as bad as sequence
+
+### red
+
+```{r}
+qqnorm(resid(cells_trtR_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_trtR_models$x25_cd19_cd3_b_cells))
+```
+
+
+### yellow
+
+```{r}
+qqnorm(resid(cells_trtY_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_trtY_models$x25_cd19_cd3_b_cells))
+```
+
+I will log transform the data and perform mixed linear modeling and paired t-tests for every comparison to see how the data compares. 
+
+Wrangle
+```{r}
+cells_log2_long <- cells_long %>%
+  mutate(log2_cell_value = log2(cell_value)) %>%
+  filter(log2_cell_value != -Inf) # remove 0s
+```
+
+## Sequence effect test
+```{r}
+# lmer model function
+cells_log2_seq_function <- function(cells_log2_long) {
+  lmer(log2_cell_value ~ sequence + (1|patient_id), data = cells_log2_long, REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cells_log2_seq_models <- map(split(cells_log2_long,
+                              cells_log2_long$cell_type),
+                   cells_log2_seq_function)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+cells_log2_seq_results <- map_df(cells_log2_seq_models,
+                            tidy,
+                            .id = "cell_type")
+
+cells_log2_seq_results_coef <- cells_log2_seq_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+
+
+```
+
+### Results
+```{r}
+kable(cells_log2_seq_results_coef, format = "markdown", digits = 3)
+```
+
+```{r}
+# extract statistically significant cytokines 
+cells_log2_seq_psig <- cells_log2_seq_results_coef %>%
+  filter(cells_log2_seq_results_coef$p.value < 0.05)
+
+print(cells_log2_seq_psig$cell_type)
+```
+
+*No sequence effects
+
+### Resid check
+
+```{r}
+# before log transform
+qqnorm(resid(cells_seq_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_seq_models$x25_cd19_cd3_b_cells))
+```
+
+```{r}
+# after log transform
+qqnorm(resid(cells_log2_seq_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_log2_seq_models$x25_cd19_cd3_b_cells))
+```
+
+
+## Yellow treatment
+
+```{r}
+# subset data into yellow results
+cells_log2_Y_long <- cells_log2_long %>%
+  filter(intervention == "Yellow")
+```
+
+
+```{r}
+# lmer model function
+cells_log2_Y_function <- function(cells_log2_Y_long) {
+  lmer(log2_cell_value ~ sequence + (1|patient_id), data = cells_log2_Y_long, REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cells_log2_Y_models <- map(split(cells_log2_Y_long,
+                              cells_log2_Y_long$cell_type),
+                   cells_log2_Y_function)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+cells_log2_Y_results <- map_df(cells_log2_Y_models,
+                            tidy,
+                            .id = "cell_type")
+
+cells_log2_Y_results_coef <- cells_log2_Y_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+
+
+```
+
+### Results
+```{r}
+kable(cells_log2_Y_results_coef, format = "markdown", digits = 3)
+```
+
+```{r}
+# extract statistically significant cytokines 
+cells_log2_Y_psig <- cells_log2_Y_results_coef %>%
+  filter(cells_log2_Y_results_coef$p.value < 0.05)
+
+print(cells_log2_Y_psig$cell_type)
+```
+
+Now there arent any significant cells for yellow after log transforming
+
+### Resid check
+
+```{r}
+# before log transform
+qqnorm(resid(cells_trtY_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_trtY_models$x25_cd19_cd3_b_cells))
+```
+
+```{r}
+# after log transform
+qqnorm(resid(cells_log2_Y_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_log2_Y_models$x25_cd19_cd3_b_cells))
+```
+
+
+## Red treatment
+
+```{r}
+# subset data into yellow results
+cells_log2_R_long <- cells_log2_long %>%
+  filter(intervention == "Red")
+```
+
+
+```{r}
+# lmer model function
+cells_log2_R_function <- function(cells_log2_R_long) {
+  lmer(log2_cell_value ~ sequence + (1|patient_id), data = cells_log2_R_long, REML = TRUE)
+}
+
+# break data up into subsets based on cytokine, then apply funtion to each subset
+cells_log2_R_models <- map(split(cells_log2_R_long,
+                              cells_log2_R_long$cell_type),
+                   cells_log2_R_function)
+
+# create single data frame of results. apply tidy from broom.mixed package to clean up results
+cells_log2_R_results <- map_df(cells_log2_R_models,
+                            tidy,
+                            .id = "cell_type")
+
+cells_log2_R_results_coef <- cells_log2_R_results %>%
+  filter(effect == "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  add_significance(p.col = "p.value",
+                   output.col = "p.sig",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 1),
+                   symbols = c("****", "***", "**", "*", "ns")
+                   )
+
+
+
+```
+
+### Results
+```{r}
+kable(cells_log2_R_results_coef, format = "markdown", digits = 3)
+```
+
+```{r}
+# extract statistically significant cytokines 
+cells_log2_R_psig <- cells_log2_R_results_coef %>%
+  filter(cells_log2_R_results_coef$p.value < 0.05)
+
+print(cells_log2_R_psig$cell_type)
+```
+
+Now there arent any significant cells for red after log transforming
+
+### Resid check
+
+```{r}
+# before log transform
+qqnorm(resid(cells_trtR_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_trtR_models$x25_cd19_cd3_b_cells))
+```
+
+```{r}
+# after log transform
+qqnorm(resid(cells_log2_R_models$x25_cd19_cd3_b_cells))
+qqline(resid(cells_log2_R_models$x25_cd19_cd3_b_cells))
+```
+
+Looks even worse after log transform
