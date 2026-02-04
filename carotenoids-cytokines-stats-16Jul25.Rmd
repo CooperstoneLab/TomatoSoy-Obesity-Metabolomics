@@ -611,7 +611,7 @@ carot_tidy_meta_tbl_edited$pre_post_intervention <- factor(carot_tidy_meta_tbl_e
   geom_boxplot(outlier.shape = NA) +
   scale_fill_manual(values = c("Red" = "tomato1",
                                "Yellow" = "yellow1"),
-                    labels = c("Control", "Tomato-Soy"),
+                    labels = c("Tomato-Soy", "Control"),
                     name = "Intervention") +
   stat_compare_means(comparisons = my_comparisons, method = "t.test", paired = TRUE, p.adjust.method = "BH") +
   geom_point() +
